@@ -68,7 +68,7 @@ include = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["sparse", "opt_einsum"]
+module = ["sparse", "opt_einsum", "aenum"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

@@ -14,7 +14,12 @@ from ase.calculators.singlepoint import SinglePointCalculator
 import sparse
 
 import tce
-from tce.constants import LatticeStructure, get_three_body_labels, _STRUCTURE_TO_THREE_BODY_LABELS
+from tce.constants import (
+    LatticeStructure,
+    STRUCTURE_TO_THREE_BODY_LABELS,
+    get_three_body_labels,
+    register_new_lattice_structure
+)
 from tce.structures import Supercell
 from tce.training import (
     ClusterBasis,
@@ -271,7 +276,7 @@ def test_bad_pkl_object():
 @pytest.mark.parametrize("lattice_structure", LatticeStructure)
 def test_computed_labels_equal_cached_labels(lattice_structure: LatticeStructure):
 
-    cached = _STRUCTURE_TO_THREE_BODY_LABELS[lattice_structure]
+    cached = STRUCTURE_TO_THREE_BODY_LABELS[lattice_structure]
     loaded = get_three_body_labels(lattice_structure)
 
     assert np.all(cached == loaded)
@@ -450,3 +455,26 @@ def test_different_type_maps_raises_error(bcc_ce_fixture1):
                 ASEProperty.STRESS: second_ce
             }
         )
+
+def test_can_register_lattice_structure():
+
+    with pytest.warns(UserWarning):
+        register_new_lattice_structure(
+            name="DIAMOND",
+            atomic_basis=np.array([
+                [0.0, 0.0, 0.0],
+                [0.25, 0.25, 0.25],
+                [0.0, 0.5, 0.5],
+                [0.25, 0.75, 0.75],
+                [0.5, 0.0, 0.5],
+                [0.75, 0.25, 0.75],
+                [0.5, 0.5, 0.0],
+                [0.75, 0.75, 0.25]
+            ]),
+            cutoff_list=np.array([
+                0.25 * np.sqrt(3.0), 0.5 * np.sqrt(2.0), 0.25 * np.sqrt(11.0), 1.0
+            ])
+        )
+
+    assert LatticeStructure.DIAMOND in LatticeStructure
+    assert LatticeStructure.DIAMOND in STRUCTURE_TO_THREE_BODY_LABELS

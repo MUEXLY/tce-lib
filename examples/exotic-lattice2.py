@@ -1,22 +1,13 @@
 from ase import build
-from aenum import extend_enum
 import numpy as np
 
-import tce
+from tce.constants import LatticeStructure, register_new_lattice_structure, ClusterBasis
+from tce.topology import topological_feature_vector_factory
 
 
 def main():
 
     fluorite_unit_cell = build.bulk("UO2", crystalstructure="fluorite", a=1.0, cubic=True)
-    extend_enum(
-        tce.constants.LatticeStructure,
-        "FLUORITE",
-        len(tce.constants.LatticeStructure) + 1
-    )
-    tce.constants.STRUCTURE_TO_ATOMIC_BASIS[
-        tce.constants.LatticeStructure.FLUORITE
-    ] = fluorite_unit_cell.positions
-
     supercell = fluorite_unit_cell.repeat((3, 3, 3))
     distances = np.unique(supercell.get_all_distances(mic=True).flatten())
 
@@ -27,16 +18,19 @@ def main():
 
     unique_tol = np.sort(unique_tol)
     unique_tol = unique_tol[unique_tol < 1.1]
-    tce.constants.STRUCTURE_TO_CUTOFF_LISTS[
-        tce.constants.LatticeStructure.FLUORITE
-    ] = unique_tol
-    tce.constants.STRUCTURE_TO_THREE_BODY_LABELS = tce.constants.load_three_body_labels()
+
+    register_new_lattice_structure(
+        name="FLUORITE",
+        atomic_basis=fluorite_unit_cell.positions,
+        cutoff_list=unique_tol
+    )
 
     lattice_parameter = 5.6
     atoms = build.bulk(
         "UO2",
         crystalstructure="fluorite",
-        a=lattice_parameter, cubic=True
+        a=lattice_parameter,
+        cubic=True
     ).repeat((3, 3, 3))
     cations = np.array(["U", "Th"])
     rng = np.random.default_rng(seed=0)
@@ -45,9 +39,9 @@ def main():
             continue
         atoms[i].symbol = rng.choice(cations)
 
-    feature_vector_computer = tce.topology.topological_feature_vector_factory(
-        basis=tce.constants.ClusterBasis(
-            tce.constants.LatticeStructure.FLUORITE,
+    feature_vector_computer = topological_feature_vector_factory(
+        basis=ClusterBasis(
+            LatticeStructure.FLUORITE,
             lattice_parameter=lattice_parameter,
             max_adjacency_order=3,
             max_triplet_order=1

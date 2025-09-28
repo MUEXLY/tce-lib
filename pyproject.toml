@@ -34,7 +34,8 @@ dependencies = [
     "sparse>=0.14.0, <0.17.0",
     "scipy>=1.6.0, <1.16.0",
     "opt-einsum>=3.0.1, <4.0",
-    "ase>=3.10.0, <3.26.0"
+    "ase>=3.10.0, <3.26.0",
+    "aenum>=3.0.0, <3.1.17"
 ]
 
 [project.urls]
@@ -51,7 +52,6 @@ dev = [
     "scipy-stubs~=1.15.3.0"
 ]
 examples = [
-    "aenum~=3.1.16",
     "scikit-learn~=1.7.1",
     "requests~=2.32.5",
     "ovito~=3.13.1",

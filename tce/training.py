@@ -358,13 +358,13 @@ def difference_train(
     feature_computer: Optional[FeatureComputer] = None
 ) -> ClusterExpansion:
     r"""
-        convenience training method wrapper for difference trainingf. here, we train on a list of configuration pairs
-        `(initial, final)` and output a cluster expansion model.
+        convenience training method wrapper for difference training. here, we train on a list of configuration pairs
+        `(first, second)` and output a cluster expansion model.
 
         Args:
             configuration_pairs (list[tuple[Atoms, Atoms]]:
                 list of configuration pairs to train on. data pairs will look like
-                `(X_initial - X_final, y_initial - y_final)`.
+                `(X_first - X_second, y_first - y_second)`.
             basis (ClusterBasis):
                 cluster basis
             model (Model, optional):

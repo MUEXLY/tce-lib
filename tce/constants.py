@@ -23,38 +23,43 @@ LOGGER = logging.getLogger(__name__)
 class LatticeStructure(Enum):
 
     r"""
-    enum type defining the most typical lattice structures: simple cubic, body-centered cubic, and face-centered cubic.
+    This is an `Enum` type defining typical lattice structures. Importantly, this data type helps define mappings
+    between lattice structure and three body labels.
 
-    [<img
-        src="https://wisc.pb.unizin.org/app/uploads/sites/293/2019/07/CNX_Chem_10_06_CubUntCll.png"
-        width=100%
-        alt="SC, BCC, and FCC lattice structures"
-        title="Lattice structures. Source: UW-Madison Chemistry 103/104 Resource Book"
-    />](https://wisc.pb.unizin.org/app/uploads/sites/293/2019/07/CNX_Chem_10_06_CubUntCll.png)
-
-    chiefly, this data type defines mappings between lattice structure and three body labels. this is additionally
-    useful for creating a `Supercell` instance, e.g.:
-
-    ```py
-    from tce.structures.supercell import Supercell
-
-    supercell = Supercell(
-        lattice_structure=LatticeStructure.BCC,
-        lattice_parameter=2.5,
-        size=(4, 4, 4)
-    )
-    ```
-
-    which generates a $4\times 4\times 4$ bcc supercell with lattice parameter $a = 2.5$, typically in units of
-    $\mathring{\mathrm{A}}$.
+    If you want to inject a custom lattice structure, see `tce.constants.register_new_lattice_structure`.
     """
 
     SC = auto()
-    r"""simple cubic lattice structure"""
+    r"""
+    simple cubic lattice structure
+    
+    <img
+        src="https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/assets/lattice-structures/sc.png"
+        width=40%
+        alt="SC unit cell"
+        title="Simple cubic unit cell"
+    />
+    """
     BCC = auto()
-    r"""body-centered cubic lattice structure"""
+    r"""
+    body-centered cubic lattice structure
+    <img
+        src="https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/assets/lattice-structures/bcc.png"
+        width=40%
+        alt="BCC unit cell"
+        title="body-centered cubic unit cell"
+    />
+    """
     FCC = auto()
-    r"""face-centered cubic lattice structure"""
+    r"""
+    face-centered cubic lattice structure
+    <img
+        src="https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/assets/lattice-structures/fcc.png"
+        width=40%
+        alt="FCC unit cell"
+        title="face-centered cubic unit cell"
+    />
+    """
 
 
 STRUCTURE_TO_ATOMIC_BASIS: Dict[LatticeStructure, NDArray[np.floating]] = {
@@ -179,7 +184,31 @@ def register_new_lattice_structure(
 ) -> None:
 
     """
-    Register a new lattice structure to `tce`.
+    Register a new lattice structure to `tce`. For example, if I want to register a cubic diamond lattice:
+
+    ```py
+    from tce.constants import register_new_lattice_structure, LatticeStructure
+    import numpy as np
+
+    register_new_lattice_structure(
+        name="DIAMOND",
+        atomic_basis=np.array([
+            [0.0, 0.0, 0.0],
+            [0.25, 0.25, 0.25],
+            [0.0, 0.5, 0.5],
+            [0.25, 0.75, 0.75],
+            [0.5, 0.0, 0.5],
+            [0.75, 0.25, 0.75],
+            [0.5, 0.5, 0.0],
+            [0.75, 0.75, 0.25]
+        ]),
+        cutoff_list=np.array([
+            0.25 * np.sqrt(3.0), 0.5 * np.sqrt(2.0), 0.25 * np.sqrt(11.0), 1.0
+        ])
+    )
+
+    assert LatticeStructure.DIAMOND in LatticeStructure
+    ```
 
     Args:
         name (str):
@@ -209,7 +238,27 @@ def register_new_lattice_structure(
 class ClusterBasis:
 
     r"""
-    Cluster basis class which defines lattice structure and however many neighbors and triplets to include
+    Cluster basis class which defines lattice structure and however many neighbors and triplets to include.
+
+    For example, if I wanted to define a cluster expansion model for an fcc crystal with up to 3rd nearest neighbors
+    and the first-order three-body term (which is an equilateral triangle):
+
+    ```py
+    from tce.constants import LatticeStructure, ClusterBasis
+    from tce.training import train
+
+    basis = ClusterBasis(
+        lattice_structure=LatticeStructure.FCC,
+        lattice_parameter=...,
+        max_adjacency_order=3,
+        max_triplet_order=1
+    )
+
+    model = train(
+        configurations=...,
+        basis=basis
+    )
+    ```
     """
 
     lattice_structure: LatticeStructure

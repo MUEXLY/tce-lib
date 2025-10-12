@@ -35,6 +35,7 @@ from tce.training import (
 from tce.topology import symmetrize
 from tce.datasets import available_datasets, Dataset
 from tce.calculator import TCECalculator, ASEProperty
+from tce.monte_carlo import monte_carlo
 
 
 @pytest.fixture
@@ -478,3 +479,61 @@ def test_can_register_lattice_structure():
 
     assert LatticeStructure.DIAMOND in LatticeStructure
     assert LatticeStructure.DIAMOND in STRUCTURE_TO_THREE_BODY_LABELS
+
+
+def test_floating_point_corrected():
+
+    composition = {"Cu": 0.1, "Pd": 0.9}
+    lattice_structure = LatticeStructure.FCC
+    lattice_parameter = 3.862
+    size = (4, 4, 4)
+
+    rng = np.random.default_rng(seed=0)
+
+    type_map = np.array(list(composition.keys()))
+    solution = build.bulk(
+        type_map[0],
+        crystalstructure=lattice_structure.name.lower(),
+        cubic=True,
+        a=lattice_parameter
+    ).repeat(size)
+    solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
+
+    @dataclass
+    class SurrogateModel:
+        basis: ClusterBasis
+        coeffs: NDArray[np.floating]
+
+        def train(self, X, y):
+            raise NotImplementedError
+
+        def score(self, X, y):
+            raise NotImplementedError
+
+        def predict(self, x):
+            return np.dot(self.coeffs, x)
+
+    basis = ClusterBasis(
+        lattice_structure=lattice_structure,
+        lattice_parameter=lattice_parameter,
+        max_adjacency_order=2,
+        max_triplet_order=1
+    )
+    feature_length = len(type_map) ** 2 * basis.max_adjacency_order + len(type_map) ** 3 * basis.max_triplet_order
+
+    ce = ClusterExpansion(
+        model=SurrogateModel(
+            basis=basis,
+            coeffs=rng.normal(loc=0.0, scale=2.5e-3, size=feature_length)
+        ),
+        cluster_basis=basis,
+        type_map=type_map
+    )
+
+    _ = monte_carlo(
+        initial_configuration=solution,
+        cluster_expansion=ce,
+        num_steps=1_000,
+        beta=11.1,
+        generator=rng
+    )

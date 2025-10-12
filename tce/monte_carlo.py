@@ -160,12 +160,14 @@ def monte_carlo(
     lattice_structure = cluster_expansion.cluster_basis.lattice_structure
     lattice_parameter = cluster_expansion.cluster_basis.lattice_parameter
 
-    lengths = initial_configuration.get_cell().lengths()
+    size = np.diag(
+        np.linalg.solve(np.diag(lattice_parameter * np.ones(3)), initial_configuration.get_cell()[:])
+    ).astype(int)
 
     supercell = Supercell(
         lattice_structure=lattice_structure,
         lattice_parameter=lattice_parameter,
-        size=tuple((lengths // lattice_parameter).astype(int))
+        size=tuple(size)
     )
     LOGGER.debug(f"initialized supercell with size {supercell.size} for MC run")
 

@@ -440,9 +440,12 @@ __url__ = "https://github.com/MUEXLY/tce-lib"
 
 import warnings
 
+from . import calculator as calculator
 from . import constants as constants
-from . import structures as structures
+from . import datasets as datasets
+from . import monte_carlo as monte_carlo
 from . import topology as topology
+from . import training as training
 
 
 if __version__.startswith("0."):

@@ -12,8 +12,12 @@ import numpy as np
 from numpy.typing import NDArray
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
+from scipy.spatial import KDTree
 
-from tce.structures import Supercell
+from tce.constants import STRUCTURE_TO_CUTOFF_LISTS
+# from tce.structures import Supercell
+from tce.topology import get_adjacency_tensors, get_three_body_tensors, get_feature_vector, \
+    get_feature_vector_difference
 from tce.training import ClusterExpansion
 
 
@@ -160,31 +164,42 @@ def monte_carlo(
     lattice_structure = cluster_expansion.cluster_basis.lattice_structure
     lattice_parameter = cluster_expansion.cluster_basis.lattice_parameter
 
-    size = np.diag(
-        np.linalg.solve(np.diag(lattice_parameter * np.ones(3)), initial_configuration.get_cell()[:])
-    ).astype(int)
-
-    supercell = Supercell(
-        lattice_structure=lattice_structure,
-        lattice_parameter=lattice_parameter,
-        size=tuple(size)
+    tree = KDTree(
+        data=initial_configuration.positions,
+        boxsize=np.diag(initial_configuration.get_cell()[:])
     )
-    LOGGER.debug(f"initialized supercell with size {supercell.size} for MC run")
+    cutoffs = STRUCTURE_TO_CUTOFF_LISTS[lattice_structure][:cluster_expansion.cluster_basis.max_adjacency_order]
+    adjacency_tensors = get_adjacency_tensors(
+        tree=tree,
+        cutoffs=lattice_parameter * cutoffs
+    )
+    three_body_tensors = get_three_body_tensors(
+        lattice_structure=lattice_structure,
+        adjacency_tensors=adjacency_tensors,
+        max_three_body_order=cluster_expansion.cluster_basis.max_triplet_order
+    )
 
     inverse_type_map = {v: k for k, v in enumerate(cluster_expansion.type_map)}
     initial_types = np.fromiter((
         inverse_type_map[symbol] for symbol in initial_configuration.get_chemical_symbols()
     ), dtype=int)
 
-    state_matrix = np.zeros((supercell.num_sites, num_types), dtype=int)
-    state_matrix[np.arange(supercell.num_sites), initial_types] = 1
+    state_matrix = np.zeros((len(initial_configuration), num_types), dtype=int)
+    state_matrix[np.arange(len(initial_configuration)), initial_types] = 1
 
     trajectory = []
-    energy = cluster_expansion.model.predict(
+    """energy = cluster_expansion.model.predict(
         supercell.feature_vector(
             state_matrix=state_matrix,
             max_adjacency_order=cluster_expansion.cluster_basis.max_adjacency_order,
             max_triplet_order=cluster_expansion.cluster_basis.max_triplet_order
+        )
+    )"""
+    energy = cluster_expansion.model.predict(
+        get_feature_vector(
+            adjacency_tensors=adjacency_tensors,
+            three_body_tensors=three_body_tensors,
+            state_matrix=state_matrix,
         )
     )
     LOGGER.debug(f"initial energy is {energy}")
@@ -201,11 +216,17 @@ def monte_carlo(
             LOGGER.info(f"saved configuration at step {step:.0f}/{num_steps:.0f}")
 
         new_state_matrix = mc_step(state_matrix)
-        feature_diff = supercell.clever_feature_diff(
+        feature_diff = get_feature_vector_difference(
+            adjacency_tensors=adjacency_tensors,
+            three_body_tensors=three_body_tensors,
+            initial_state_matrix=state_matrix,
+            final_state_matrix=new_state_matrix,
+        )
+        """feature_diff = supercell.clever_feature_diff(
             state_matrix, new_state_matrix,
             max_adjacency_order=cluster_expansion.cluster_basis.max_adjacency_order,
             max_triplet_order=cluster_expansion.cluster_basis.max_triplet_order
-        )
+        )"""
         energy_diff = cluster_expansion.model.predict(feature_diff)
         if not isinstance(energy_diff, float):
             raise ValueError(

@@ -1,7 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from ase import build
+from scipy.spatial import KDTree
 
-import tce
+from tce.constants import STRUCTURE_TO_CUTOFF_LISTS, LatticeStructure
+from tce.topology import get_adjacency_tensors, get_three_body_tensors, get_feature_vector
 
 
 def main():
@@ -10,26 +13,46 @@ def main():
     feature_sizes = np.zeros_like(vertical_lengths)
     rng = np.random.default_rng(seed=0)
 
+    lattice_structure = LatticeStructure.BCC
+    lattice_parameter = 3.5
+
     for i, length in enumerate(vertical_lengths):
         # construct the supercell
-        supercell = tce.structures.Supercell(
-            lattice_structure=tce.constants.LatticeStructure.FCC,
-            lattice_parameter=3.5,
-            size=(3, 3, length)
-        )
-        num_atoms[i] = supercell.num_sites
+        supercell = build.bulk(
+            "Cu",
+            crystalstructure=lattice_structure.name.lower(),
+            a=lattice_parameter,
+            cubic=True
+        ).repeat((3, 3, length))
+        num_atoms[i] = len(supercell)
+        supercell.symbols = rng.choice(["Cu", "Pd"], p=[0.5, 0.5], size=len(supercell))
 
-        types = rng.choice([0, 1], p=[0.5, 0.5], size=supercell.num_sites)
-        state_matrix = np.zeros((supercell.num_sites, 2))
-        for site, t in enumerate(types):
-            state_matrix[site, t] = 1.0
+        state_matrix = np.zeros((len(supercell), 2))
+        for site, t in enumerate(supercell.symbols):
+            if t == "Cu":
+                j = 0
+            elif t == "Pd":
+                j = 1
+            else:
+                raise ValueError
+            state_matrix[site, j] = 1.0
 
         # compute the feature vector for that state matrix
-        feature_vector = supercell.feature_vector(
-            state_matrix,
-            max_adjacency_order=3,
-            max_triplet_order=2
+        adjacency_tensors = get_adjacency_tensors(
+            tree=KDTree(data=supercell.positions, boxsize=np.diag(supercell.get_cell()[:])),
+            cutoffs=lattice_parameter * STRUCTURE_TO_CUTOFF_LISTS[lattice_structure][:3]
         )
+        three_body_tensors = get_three_body_tensors(
+            lattice_structure=lattice_structure,
+            adjacency_tensors=adjacency_tensors,
+            max_three_body_order=2
+        )
+        feature_vector = get_feature_vector(
+            adjacency_tensors=adjacency_tensors,
+            three_body_tensors=three_body_tensors,
+            state_matrix=state_matrix,
+        )
+        print(feature_vector, np.linalg.norm(feature_vector))
         feature_sizes[i] = np.linalg.norm(feature_vector)
 
     plt.scatter(num_atoms, feature_sizes, edgecolor="black", facecolor="turquoise", zorder=7)

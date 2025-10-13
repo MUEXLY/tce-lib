@@ -5,7 +5,6 @@ from numpy.typing import NDArray
 
 from tce.constants import LatticeStructure, ClusterBasis
 from tce.training import train, get_type_map
-from tce.structures import Supercell
 from tce.topology import topological_feature_vector_factory
 
 

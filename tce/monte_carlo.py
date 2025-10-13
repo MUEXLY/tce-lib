@@ -15,7 +15,6 @@ from ase.calculators.singlepoint import SinglePointCalculator
 from scipy.spatial import KDTree
 
 from tce.constants import STRUCTURE_TO_CUTOFF_LISTS
-# from tce.structures import Supercell
 from tce.topology import get_adjacency_tensors, get_three_body_tensors, get_feature_vector, \
     get_feature_vector_difference
 from tce.training import ClusterExpansion
@@ -184,7 +183,7 @@ def monte_carlo(
         inverse_type_map[symbol] for symbol in initial_configuration.get_chemical_symbols()
     ), dtype=int)
 
-    state_matrix = np.zeros((len(initial_configuration), num_types), dtype=int)
+    state_matrix = np.zeros((len(initial_configuration), num_types), dtype=float)
     state_matrix[np.arange(len(initial_configuration)), initial_types] = 1
 
     trajectory = []

@@ -4,7 +4,7 @@ model.
 """
 
 
-from typing import Optional, Callable, TypeAlias, TypeVar
+from typing import Optional, Callable, TypeAlias
 import logging
 from functools import wraps
 

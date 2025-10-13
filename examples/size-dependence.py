@@ -52,7 +52,6 @@ def main():
             three_body_tensors=three_body_tensors,
             state_matrix=state_matrix,
         )
-        print(feature_vector, np.linalg.norm(feature_vector))
         feature_sizes[i] = np.linalg.norm(feature_vector)
 
     plt.scatter(num_atoms, feature_sizes, edgecolor="black", facecolor="turquoise", zorder=7)

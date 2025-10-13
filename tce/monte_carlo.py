@@ -23,11 +23,7 @@ from tce.training import ClusterExpansion
 LOGGER = logging.getLogger(__name__)
 """@private"""
 
-
-FloatingDType = TypeVar("FloatingDType", bound=np.floating)
-
-
-MCStep: TypeAlias = Callable[[NDArray[FloatingDType]], NDArray[FloatingDType]]
+MCStep: TypeAlias = Callable[[NDArray[np.floating]], NDArray[np.floating]]
 r"""
 Type alias defining what a step in a monte carlo simulation looks like. In general, a step should look like a function 
 that takes in a state matrix $\mathbf{X}$, and returns a new one.
@@ -186,7 +182,7 @@ def monte_carlo(
         inverse_type_map[symbol] for symbol in initial_configuration.get_chemical_symbols()
     ), dtype=int)
 
-    state_matrix = np.zeros((len(initial_configuration), num_types), dtype=float)
+    state_matrix: NDArray[np.floating] = np.zeros((len(initial_configuration), num_types), dtype=float)
     state_matrix[np.arange(len(initial_configuration)), initial_types] = 1
 
     trajectory = []

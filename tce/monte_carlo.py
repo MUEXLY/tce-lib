@@ -4,7 +4,7 @@ model.
 """
 
 
-from typing import Optional, Callable, TypeAlias
+from typing import Optional, Callable, TypeAlias, TypeVar
 import logging
 from functools import wraps
 
@@ -24,7 +24,10 @@ LOGGER = logging.getLogger(__name__)
 """@private"""
 
 
-MCStep: TypeAlias = Callable[[NDArray[np.floating]], NDArray[np.floating]]
+FloatingDType = TypeVar("FloatingDType", bound=np.floating)
+
+
+MCStep: TypeAlias = Callable[[NDArray[FloatingDType]], NDArray[FloatingDType]]
 r"""
 Type alias defining what a step in a monte carlo simulation looks like. In general, a step should look like a function 
 that takes in a state matrix $\mathbf{X}$, and returns a new one.

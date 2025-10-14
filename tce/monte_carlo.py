@@ -186,20 +186,18 @@ def monte_carlo(
     state_matrix[np.arange(len(initial_configuration)), initial_types] = 1
 
     trajectory = []
-    """energy = cluster_expansion.model.predict(
-        supercell.feature_vector(
-            state_matrix=state_matrix,
-            max_adjacency_order=cluster_expansion.cluster_basis.max_adjacency_order,
-            max_triplet_order=cluster_expansion.cluster_basis.max_triplet_order
-        )
-    )"""
-    energy = cluster_expansion.model.predict(
-        get_feature_vector(
-            adjacency_tensors=adjacency_tensors,
-            three_body_tensors=three_body_tensors,
-            state_matrix=state_matrix,
-        )
+    feature_vector = get_feature_vector(
+        adjacency_tensors=adjacency_tensors,
+        three_body_tensors=three_body_tensors,
+        state_matrix=state_matrix,
     )
+    try:
+        energy = cluster_expansion.model.predict(feature_vector)
+    except ValueError:
+        feature_vector = feature_vector.reshape(1, -1)
+        energy = cluster_expansion.model.predict(feature_vector)
+        if not isinstance(energy, float):
+            energy = energy.item()
     LOGGER.debug(f"initial energy is {energy}")
     for step in range(num_steps):
 
@@ -220,12 +218,13 @@ def monte_carlo(
             initial_state_matrix=state_matrix,
             final_state_matrix=new_state_matrix,
         )
-        """feature_diff = supercell.clever_feature_diff(
-            state_matrix, new_state_matrix,
-            max_adjacency_order=cluster_expansion.cluster_basis.max_adjacency_order,
-            max_triplet_order=cluster_expansion.cluster_basis.max_triplet_order
-        )"""
-        energy_diff = cluster_expansion.model.predict(feature_diff)
+        try:
+            energy_diff = cluster_expansion.model.predict(feature_diff)
+        except ValueError:
+            feature_diff = feature_diff.reshape(1, -1)
+            energy_diff = cluster_expansion.model.predict(feature_diff)
+            if not isinstance(energy_diff, float):
+                energy_diff = energy_diff.item()
         if not isinstance(energy_diff, float):
             raise ValueError(
                 "cluster_expansion.model.predict did not return a float. "

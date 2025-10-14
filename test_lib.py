@@ -5,6 +5,7 @@ from pathlib import Path
 import pickle
 from dataclasses import dataclass
 from copy import deepcopy
+from sklearn.linear_model import RidgeCV
 
 import pytest
 import numpy as np
@@ -536,4 +537,44 @@ def test_floating_point_corrected():
         num_steps=1_000,
         beta=11.1,
         generator=rng
+    )
+
+
+def test_sklearn_model_in_mc():
+    composition = {"Cu": 0.1, "Pd": 0.9}
+    lattice_structure = LatticeStructure.FCC
+    lattice_parameter = 3.862
+    size = (4, 4, 4)
+
+    rng = np.random.default_rng(seed=0)
+
+    type_map = np.array(list(composition.keys()))
+    solutions = []
+    for _ in range(2):
+        solution = build.bulk(
+            type_map[0],
+            crystalstructure=lattice_structure.name.lower(),
+            cubic=True,
+            a=lattice_parameter
+        ).repeat(size)
+        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
+        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
+        solutions.append(solution)
+
+    ce = train(
+        configurations=solutions,
+        basis=ClusterBasis(
+            lattice_structure=lattice_structure,
+            lattice_parameter=lattice_parameter,
+            max_adjacency_order=2,
+            max_triplet_order=1
+        ),
+        model=RidgeCV()
+    )
+
+    _ = monte_carlo(
+        initial_configuration=solutions[0],
+        cluster_expansion=ce,
+        num_steps=10,
+        beta=11.1
     )

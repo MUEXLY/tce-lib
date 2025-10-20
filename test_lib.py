@@ -6,6 +6,8 @@ import pickle
 from dataclasses import dataclass
 from copy import deepcopy
 from sklearn.linear_model import RidgeCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
 
 import pytest
 import numpy as np
@@ -69,7 +71,8 @@ def get_supercell() -> Callable[[], Supercell]:
 )
 def test_num_neighbors(lattice_structure: LatticeStructure, num_expected_neighbors: int, get_supercell):
 
-    supercell = get_supercell(lattice_structure)
+    with pytest.warns(DeprecationWarning):
+        supercell = get_supercell(lattice_structure)
 
     for adj in supercell.adjacency_tensors(max_order=1):
         assert adj.sum(axis=0).todense().mean() == num_expected_neighbors
@@ -81,7 +84,8 @@ def test_feature_vector_shortcut(lattice_structure: LatticeStructure, get_superc
     rng = np.random.default_rng(seed=0)
     num_types = 3
 
-    supercell = get_supercell(lattice_structure)
+    with pytest.warns(DeprecationWarning):
+        supercell = get_supercell(lattice_structure)
 
     types = rng.integers(num_types, size=supercell.num_sites)
 
@@ -569,8 +573,223 @@ def test_sklearn_model_in_mc():
             max_adjacency_order=2,
             max_triplet_order=1
         ),
+        model=RidgeCV(fit_intercept=False)
+    )
+
+    _ = monte_carlo(
+        initial_configuration=solutions[0],
+        cluster_expansion=ce,
+        num_steps=10,
+        beta=11.1
+    )
+
+
+def test_sklearn_model_with_intercept_warns_in_mc():
+    composition = {"Cu": 0.1, "Pd": 0.9}
+    lattice_structure = LatticeStructure.FCC
+    lattice_parameter = 3.862
+    size = (4, 4, 4)
+
+    rng = np.random.default_rng(seed=0)
+
+    type_map = np.array(list(composition.keys()))
+    solutions = []
+    for _ in range(2):
+        solution = build.bulk(
+            type_map[0],
+            crystalstructure=lattice_structure.name.lower(),
+            cubic=True,
+            a=lattice_parameter
+        ).repeat(size)
+        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
+        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
+        solutions.append(solution)
+
+    ce = train(
+        configurations=solutions,
+        basis=ClusterBasis(
+            lattice_structure=lattice_structure,
+            lattice_parameter=lattice_parameter,
+            max_adjacency_order=2,
+            max_triplet_order=1
+        ),
         model=RidgeCV()
     )
+
+    with pytest.warns(UserWarning):
+        _ = monte_carlo(
+            initial_configuration=solutions[0],
+            cluster_expansion=ce,
+            num_steps=10,
+            beta=11.1
+        )
+
+
+def test_sklearn_model_setting_intercept_to_zero_in_mc():
+    composition = {"Cu": 0.1, "Pd": 0.9}
+    lattice_structure = LatticeStructure.FCC
+    lattice_parameter = 3.862
+    size = (4, 4, 4)
+
+    rng = np.random.default_rng(seed=0)
+
+    type_map = np.array(list(composition.keys()))
+    solutions = []
+    for _ in range(2):
+        solution = build.bulk(
+            type_map[0],
+            crystalstructure=lattice_structure.name.lower(),
+            cubic=True,
+            a=lattice_parameter
+        ).repeat(size)
+        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
+        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
+        solutions.append(solution)
+
+    ce = train(
+        configurations=solutions,
+        basis=ClusterBasis(
+            lattice_structure=lattice_structure,
+            lattice_parameter=lattice_parameter,
+            max_adjacency_order=2,
+            max_triplet_order=1
+        ),
+        model=RidgeCV()
+    )
+
+    ce.model.intercept_ = 0.0
+
+    _ = monte_carlo(
+        initial_configuration=solutions[0],
+        cluster_expansion=ce,
+        num_steps=10,
+        beta=11.1
+    )
+
+
+def test_sklearn_pipeline_in_mc():
+    composition = {"Cu": 0.1, "Pd": 0.9}
+    lattice_structure = LatticeStructure.FCC
+    lattice_parameter = 3.862
+    size = (4, 4, 4)
+
+    rng = np.random.default_rng(seed=0)
+
+    type_map = np.array(list(composition.keys()))
+    solutions = []
+    for _ in range(2):
+        solution = build.bulk(
+            type_map[0],
+            crystalstructure=lattice_structure.name.lower(),
+            cubic=True,
+            a=lattice_parameter
+        ).repeat(size)
+        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
+        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
+        solutions.append(solution)
+
+    ce = train(
+        configurations=solutions,
+        basis=ClusterBasis(
+            lattice_structure=lattice_structure,
+            lattice_parameter=lattice_parameter,
+            max_adjacency_order=2,
+            max_triplet_order=1
+        ),
+        model=Pipeline([
+            ("scale", StandardScaler()),
+            ("fit", RidgeCV(fit_intercept=False))
+        ])
+    )
+
+    _ = monte_carlo(
+        initial_configuration=solutions[0],
+        cluster_expansion=ce,
+        num_steps=10,
+        beta=11.1
+    )
+
+
+def test_sklearn_pipeline_with_intercept_sends_warning_in_mc():
+    composition = {"Cu": 0.1, "Pd": 0.9}
+    lattice_structure = LatticeStructure.FCC
+    lattice_parameter = 3.862
+    size = (4, 4, 4)
+
+    rng = np.random.default_rng(seed=0)
+
+    type_map = np.array(list(composition.keys()))
+    solutions = []
+    for _ in range(2):
+        solution = build.bulk(
+            type_map[0],
+            crystalstructure=lattice_structure.name.lower(),
+            cubic=True,
+            a=lattice_parameter
+        ).repeat(size)
+        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
+        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
+        solutions.append(solution)
+
+    ce = train(
+        configurations=solutions,
+        basis=ClusterBasis(
+            lattice_structure=lattice_structure,
+            lattice_parameter=lattice_parameter,
+            max_adjacency_order=2,
+            max_triplet_order=1
+        ),
+        model=Pipeline([
+            ("scale", StandardScaler()),
+            ("fit", RidgeCV())
+        ])
+    )
+
+    with pytest.warns(UserWarning):
+        _ = monte_carlo(
+            initial_configuration=solutions[0],
+            cluster_expansion=ce,
+            num_steps=10,
+            beta=11.1
+        )
+
+
+def test_sklearn_pipeline_setting_intercept_to_zero_in_mc():
+    composition = {"Cu": 0.1, "Pd": 0.9}
+    lattice_structure = LatticeStructure.FCC
+    lattice_parameter = 3.862
+    size = (4, 4, 4)
+
+    rng = np.random.default_rng(seed=0)
+
+    type_map = np.array(list(composition.keys()))
+    solutions = []
+    for _ in range(2):
+        solution = build.bulk(
+            type_map[0],
+            crystalstructure=lattice_structure.name.lower(),
+            cubic=True,
+            a=lattice_parameter
+        ).repeat(size)
+        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
+        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
+        solutions.append(solution)
+
+    ce = train(
+        configurations=solutions,
+        basis=ClusterBasis(
+            lattice_structure=lattice_structure,
+            lattice_parameter=lattice_parameter,
+            max_adjacency_order=2,
+            max_triplet_order=1
+        ),
+        model=Pipeline([
+            ("scale", StandardScaler()),
+            ("fit", RidgeCV())
+        ])
+    )
+
+    ce.model["fit"].intercept_ = 0.0
 
     _ = monte_carlo(
         initial_configuration=solutions[0],

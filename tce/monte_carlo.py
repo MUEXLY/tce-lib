@@ -7,6 +7,7 @@ model.
 from typing import Optional, Callable, TypeAlias
 import logging
 from functools import wraps
+import warnings
 
 import numpy as np
 from numpy.typing import NDArray
@@ -191,6 +192,26 @@ def monte_carlo(
         three_body_tensors=three_body_tensors,
         state_matrix=state_matrix,
     )
+
+    if getattr(cluster_expansion.model, "intercept_", 0.0):
+        warnings.warn(
+            "Your model object has a non-zero intercept_ attribute. If your intercept is non-zero, the feature "
+            "difference calculation will not work, i.e. E_2 - E_1 = (α + βx_2) - (α + βx_1) = β(x_2 - x_1), so your "
+            "incoming model should be intercept-less. You can zero out this intercept by setting "
+            "cluster_expansion.model.intercept_ = 0."
+        )
+
+    if steps := getattr(cluster_expansion.model, "steps", False):
+        final_step_name, final_step_estimator = steps[-1]
+
+        if getattr(final_step_estimator, "intercept_", 0.0):
+            warnings.warn(
+                "Your pipeline object has a non-zero intercept_ attribute in the final step. If your intercept is "
+                "non-zero, the feature difference calculation will not work, i.e. "
+                "E_2 - E_1 = (α + βx_2) - (α + βx_1) = β(x_2 - x_1), so your incoming model should be intercept-less. "
+                "You can zero out this intercept by setting cluster_expansion.model[final_step_name].intercept_ = 0."
+            )
+
     try:
         energy = cluster_expansion.model.predict(feature_vector)
     except ValueError:

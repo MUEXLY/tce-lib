@@ -202,6 +202,7 @@ def monte_carlo(
         )
 
     if steps := getattr(cluster_expansion.model, "steps", False):
+        assert isinstance(steps, list) and isinstance(steps[-1], tuple)
         final_step_name, final_step_estimator = steps[-1]
 
         if getattr(final_step_estimator, "intercept_", 0.0):

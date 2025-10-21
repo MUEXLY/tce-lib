@@ -19,7 +19,6 @@ from ase import Atoms
 from .constants import (
     LatticeStructure,
     STRUCTURE_TO_THREE_BODY_LABELS,
-    #load_three_body_labels,
     ClusterBasis,
     STRUCTURE_TO_CUTOFF_LISTS
 )
@@ -276,7 +275,11 @@ def hash_topology(atoms: Atoms) -> tuple[str, str]:
     return positions_hash, cell_hash
 
 
-def topological_feature_vector_factory(basis: ClusterBasis, type_map: NDArray[np.str_]) -> FeatureComputer:
+def topological_feature_vector_factory(
+    basis: ClusterBasis,
+    type_map: NDArray[np.str_],
+    tolerance: float = 0.01
+) -> FeatureComputer:
 
     r"""
     Factory method for creating a topological feature vector computer.
@@ -286,6 +289,8 @@ def topological_feature_vector_factory(basis: ClusterBasis, type_map: NDArray[np
             cluster basis for the topological feature vector computer
         type_map (NDArray[np.str_]):
             chemical type map that defines how chemical species are ordered
+        tolerance (float):
+            tolerance for distance binning
     """
 
     num_types = len(type_map)
@@ -305,6 +310,7 @@ def topological_feature_vector_factory(basis: ClusterBasis, type_map: NDArray[np
                 tree=tree,
                 cutoffs=basis.lattice_parameter * STRUCTURE_TO_CUTOFF_LISTS[basis.lattice_structure][
                                                   :basis.max_adjacency_order],
+                tolerance=tolerance,
             )
             three_body_tensors = get_three_body_tensors(
                 lattice_structure=basis.lattice_structure,

@@ -8,8 +8,10 @@ from pathlib import Path
 import json
 from importlib.resources import files, as_file
 import logging
+import warnings
 
 from ase import Atoms, io
+from aenum import Enum
 
 from tce.constants import LatticeStructure
 from tce.training import get_type_map
@@ -20,6 +22,14 @@ LOGGER = logging.getLogger(__name__)
 
 TCE_MODULE_TRAVERSABLE = files("tce")
 """@private"""
+
+
+class PresetDataset(Enum):
+
+    CANTOR_ALLOY_SURROGATE = "cantor_allow_surrogate"
+    IRON_CHROME_ALUMINUM_SURROGATE = "iron_chrome_aluminum_surrogate"
+    NOBLE_HEA_SURROGATE = "noble_hea_surrogate"
+    TUNGSTEN_TANTALUM_GENETIC = "tungsten_tantalum_genetic"
 
 
 @dataclass
@@ -69,6 +79,11 @@ class Dataset:
     @classmethod
     def from_dir(cls, directory: Path) -> "Dataset":
 
+        warnings.warn(
+            f"{cls.__name__}.from_dir is deprecated. Use {cls.__name__}.from_preset instead.",
+            DeprecationWarning
+        )
+
         with as_file(TCE_MODULE_TRAVERSABLE) as module_dir:
             dataset_dir = module_dir / "datasets"
 
@@ -90,9 +105,45 @@ class Dataset:
             f"{', '.join(get_type_map(configurations))}."
         )
         return instance
-    
+
+    @classmethod
+    def from_preset(cls, preset: PresetDataset) -> "Dataset":
+
+        directory = Path(preset.value)
+        with as_file(TCE_MODULE_TRAVERSABLE) as module_dir:
+            dataset_dir = module_dir / "datasets"
+
+            with (dataset_dir / directory / "metadata.json").open("r") as file:
+                metadata = json.load(file)
+
+            metadata["lattice_structure"] = getattr(LatticeStructure, metadata["lattice_structure"].upper())
+
+            configurations = []
+            for path in (dataset_dir / directory).glob("*.xyz"):
+                configuration = io.read(path, format="extxyz")
+                if isinstance(configuration, list):
+                    raise ValueError(f"path {path} contained multiple frames")
+                configurations.append(configuration)
+
+        instance = cls(**metadata, configurations=configurations)
+        LOGGER.debug(
+            f"loaded dataset from {directory} with {len(instance.configurations):.0f} configurations with types "
+            f"{', '.join(get_type_map(configurations))}."
+        )
+        return instance
+
+
+def get_available_datasets() -> list[PresetDataset]:
+
+    return list(PresetDataset)
+
 
 def available_datasets() -> list[str]:
+
+    warnings.warn(
+        "available_datasets is deprecated. Please use get_available_datasets instead.",
+        DeprecationWarning
+    )
 
     with as_file(TCE_MODULE_TRAVERSABLE) as module_dir:
         dataset_dir = module_dir / "datasets"

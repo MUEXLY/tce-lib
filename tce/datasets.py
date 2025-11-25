@@ -26,7 +26,7 @@ TCE_MODULE_TRAVERSABLE = files("tce")
 
 class PresetDataset(Enum):
 
-    CANTOR_ALLOY_SURROGATE = "cantor_allow_surrogate"
+    CANTOR_ALLOY_SURROGATE = "cantor_alloy_surrogate"
     IRON_CHROME_ALUMINUM_SURROGATE = "iron_chrome_aluminum_surrogate"
     NOBLE_HEA_SURROGATE = "noble_hea_surrogate"
     TUNGSTEN_TANTALUM_GENETIC = "tungsten_tantalum_genetic"

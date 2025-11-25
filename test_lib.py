@@ -36,7 +36,7 @@ from tce.training import (
     difference_train
 )
 from tce.topology import symmetrize
-from tce.datasets import available_datasets, Dataset
+from tce.datasets import PresetDataset, Dataset, available_datasets
 from tce.calculator import TCECalculator, ASEProperty
 from tce.monte_carlo import monte_carlo
 
@@ -204,10 +204,10 @@ def test_large_system_in_training(monkeypatch):
             )
 
 
-@pytest.mark.parametrize("dataset_str", available_datasets())
-def test_can_load_and_compute_energies_from_dataset(dataset_str):
+@pytest.mark.parametrize("preset_dataset", PresetDataset)
+def test_can_load_and_compute_energies_from_dataset(preset_dataset):
 
-    dataset = Dataset.from_dir(dataset_str)
+    dataset = Dataset.from_preset(preset_dataset)
     print(dataset)
     for configuration in dataset.configurations:
         _ = configuration.get_potential_energy()
@@ -288,10 +288,10 @@ def test_computed_labels_equal_cached_labels(lattice_structure: LatticeStructure
     assert np.all(cached == loaded)
 
 
-@pytest.mark.parametrize("dataset_str", available_datasets())
-def test_can_train_and_attach_calculator(dataset_str):
+@pytest.mark.parametrize("preset_dataset", PresetDataset)
+def test_can_train_and_attach_calculator(preset_dataset):
 
-    dataset = Dataset.from_dir(dataset_str)
+    dataset = Dataset.from_preset(preset_dataset)
     configurations = dataset.configurations[:10]
     ce = train(
         configurations,
@@ -314,10 +314,10 @@ def test_can_train_and_attach_calculator(dataset_str):
         _ = configuration.get_potential_energy()
 
 
-@pytest.mark.parametrize("dataset_str", available_datasets())
-def test_can_difference_train(dataset_str):
+@pytest.mark.parametrize("preset_dataset", PresetDataset)
+def test_can_difference_train(preset_dataset):
 
-    dataset = Dataset.from_dir(dataset_str)
+    dataset = Dataset.from_preset(preset_dataset)
     configurations = dataset.configurations[:10]
 
     configuration_pairs = [
@@ -434,7 +434,7 @@ def bcc_ce_fixture2():
 
 def test_different_basis_raises_error(bcc_ce_fixture1, bcc_ce_fixture2):
 
-    tungsten_tantalum_dataset = Dataset.from_dir("tungsten_tantalum_genetic")
+    tungsten_tantalum_dataset = Dataset.from_preset(PresetDataset.TUNGSTEN_TANTALUM_GENETIC)
     config = tungsten_tantalum_dataset.configurations[0]
 
     with pytest.raises(ValueError):
@@ -451,7 +451,7 @@ def test_different_type_maps_raises_error(bcc_ce_fixture1):
     second_ce = deepcopy(bcc_ce_fixture1)
     second_ce.type_map = np.sort(np.array(["Ta", "W"]))
 
-    tungsten_tantalum_dataset = Dataset.from_dir("tungsten_tantalum_genetic")
+    tungsten_tantalum_dataset = Dataset.from_preset(PresetDataset.TUNGSTEN_TANTALUM_GENETIC)
     config = tungsten_tantalum_dataset.configurations[0]
 
     with pytest.raises(ValueError):
@@ -797,3 +797,13 @@ def test_sklearn_pipeline_setting_intercept_to_zero_in_mc():
         num_steps=10,
         beta=11.1
     )
+
+
+def test_old_preset_loading_method_warns():
+
+    with pytest.warns(DeprecationWarning):
+        dataset_paths = available_datasets()
+    for p in dataset_paths:
+        assert isinstance(p, str)
+        with pytest.warns(DeprecationWarning):
+            _ = Dataset.from_dir(Path(p))

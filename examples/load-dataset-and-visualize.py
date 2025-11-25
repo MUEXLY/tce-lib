@@ -11,7 +11,8 @@ from ovito.qt_compat import QtCore
 from ovito.data import DataCollection
 import numpy as np
 
-from tce.datasets import Dataset, available_datasets
+# from tce.datasets import Dataset, available_datasets
+from tce.datasets import Dataset, PresetDataset
 
 
 OvitoModifier: TypeAlias = Callable[[int, DataCollection], None]
@@ -38,10 +39,10 @@ def change_colors_modifier(
 def main():
 
     # you can print out the available datasets
-    for dataset_name in available_datasets():
+    for dataset_name in PresetDataset:
         print(dataset_name)
 
-    dataset = Dataset.from_dir(Path("tungsten_tantalum_genetic"))
+    dataset = Dataset.from_preset(PresetDataset.TUNGSTEN_TANTALUM_GENETIC)
     configurations = dataset.configurations
     
     len_x, len_y = 25, 10

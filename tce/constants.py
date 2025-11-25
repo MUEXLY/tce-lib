@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import logging
 import warnings
 
-from aenum import Enum, auto, extend_enum
+from aenum import StrEnum, auto, extend_enum
 import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial import KDTree
@@ -20,7 +20,7 @@ import sparse
 LOGGER = logging.getLogger(__name__)
 
 
-class LatticeStructure(Enum):
+class LatticeStructure(StrEnum):
 
     r"""
     This is an `Enum` type defining typical lattice structures. Importantly, this data type helps define mappings

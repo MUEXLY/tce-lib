@@ -4,7 +4,7 @@ model.
 """
 
 
-from typing import Optional, Callable, TypeAlias
+from typing import Optional, Callable, TypeAlias, Sequence
 import logging
 from functools import wraps
 import warnings
@@ -102,7 +102,7 @@ def monte_carlo(
     initial_configuration: Atoms,
     cluster_expansion: ClusterExpansion,
     num_steps: int,
-    beta: float,
+    beta: float | Sequence[float] | NDArray[np.floating],
     save_every: int = 1,
     generator: Optional[np.random.Generator] = None,
     mc_step: Optional[MCStep] = None,
@@ -121,10 +121,13 @@ def monte_carlo(
             be created by `tce.training.train`.
         num_steps (int):
             Number of Monte Carlo steps to perform
-        beta (float):
+        beta (float, Sequence[float], np.array):
             Thermodynamic $\beta$, defined by $\beta = 1/(k_BT)$, where $k_B$ is the Boltzmann constant and $T$ is
             absolute temperature. ensure that $k_B$ is in proper units such that $\beta$ is in appropriate units. for
             example, if the training data had energy units of eV, then $k_B$ should be defined in units of eV/K.
+            If beta is a float, then the same beta value is used for all MC steps. if beta is a sequence of floats,
+            then for each step `i`, `beta[i]` is used. in this case, the length of the sequence must be equal to
+            `num_steps`.
         save_every (int):
             How many steps to perform before saving the MC frame. this is similar to LAMMPS's `dump_every` argument
             in the `dump` command
@@ -157,6 +160,14 @@ def monte_carlo(
     if not callback:
         def callback(step_: int, num_steps_: int):
             LOGGER.info(f"MC step {step_:.0f}/{num_steps_:.0f}")
+
+    if isinstance(beta, (Sequence, np.ndarray)):
+        assert len(beta) == num_steps, "if beta is a sequence, it must be the same length as num_steps"
+        beta_values = np.array(beta)
+    elif isinstance(beta, float):
+        beta_values = np.full(num_steps, beta)
+    else:
+        raise TypeError("beta must be either a float or a sequence of floats")
 
     num_types = len(cluster_expansion.type_map)
 
@@ -253,7 +264,7 @@ def monte_carlo(
                 "Are you sure this model was trained on energies?"
             )
         modified_energy = energy_diff + energy_modifier(state_matrix, new_state_matrix)
-        if np.exp(-beta * modified_energy) > 1.0 - generator.random():
+        if np.exp(-beta_values[step] * modified_energy) > 1.0 - generator.random():
             LOGGER.debug(f"move accepted with energy difference {energy_diff:.3f}")
             state_matrix = new_state_matrix
             energy += energy_diff

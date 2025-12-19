@@ -798,6 +798,58 @@ def test_sklearn_pipeline_setting_intercept_to_zero_in_mc():
         beta=11.1
     )
 
+@pytest.mark.parametrize("beta", [11.1, [11.1]*10, np.linspace(10.0, 12.0, 10), [11.1, 11.1]])
+def test_annealing_mc(beta):
+    composition = {"Cu": 0.1, "Pd": 0.9}
+    lattice_structure = LatticeStructure.FCC
+    lattice_parameter = 3.862
+    size = (4, 4, 4)
+
+    rng = np.random.default_rng(seed=0)
+
+    type_map = np.array(list(composition.keys()))
+    solutions = []
+    for _ in range(2):
+        solution = build.bulk(
+            type_map[0],
+            crystalstructure=lattice_structure.name.lower(),
+            cubic=True,
+            a=lattice_parameter
+        ).repeat(size)
+        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
+        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
+        solutions.append(solution)
+
+    ce = train(
+        configurations=solutions,
+        basis=ClusterBasis(
+            lattice_structure=lattice_structure,
+            lattice_parameter=lattice_parameter,
+            max_adjacency_order=2,
+            max_triplet_order=1
+        ),
+        model=RidgeCV(fit_intercept=False)
+    )
+    if isinstance(beta, list):
+        if len(beta) == 2:
+            # invalid length, should raise error
+            with pytest.raises(AssertionError):
+                _ = monte_carlo(
+                    initial_configuration=solutions[0],
+                    cluster_expansion=ce,
+                    num_steps=10,
+                    beta=beta
+                )
+            return
+
+    # for now, only tests that no error is raised. TODO: check that correct betas are used
+    _ = monte_carlo(
+        initial_configuration=solutions[0],
+        cluster_expansion=ce,
+        num_steps=10,
+        beta=beta
+    )
+
 
 def test_old_preset_loading_method_warns():
 

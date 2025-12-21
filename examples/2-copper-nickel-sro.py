@@ -18,7 +18,11 @@ def main():
     pipeline.modifiers.append(sro_modifier())
 
     sro_parameters = [data.attributes["sro_12"] for data in pipeline.frames]
-    energies = [energy_per_atom(io.read(p)) for p in Path("copper-nickel").glob("frame_*.xyz")]
+
+    # sort by number in filename, lexographical sorting done by Path.glob does not work
+    paths = list(Path("copper-nickel").glob("frame_*.xyz"))
+    paths.sort(key=lambda path: int(path.stem.split("_")[1]))
+    energies = [energy_per_atom(io.read(p)) for p in paths]
 
     fig, axs = plt.subplots(nrows=2, ncols=1, sharex=True)
     axs[0].plot(sro_parameters, color="mediumvioletred")

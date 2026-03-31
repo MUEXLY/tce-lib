@@ -18,7 +18,7 @@ from scipy.spatial import KDTree
 from tce.constants import STRUCTURE_TO_CUTOFF_LISTS
 from tce.topology import get_adjacency_tensors, get_three_body_tensors, get_feature_vector, \
     get_feature_vector_difference
-from tce.training import ClusterExpansion
+from tce.training import ClusterExpansion, Model, LimitingRidge
 
 
 LOGGER = logging.getLogger(__name__)
@@ -84,6 +84,119 @@ def energy_modifier_factory(
 
 You can see a concrete example of the above energy modifier [here](https://github.com/MUEXLY/tce-lib#training-monte-carlo).
 """
+
+
+class SurrogateModel:
+
+    r"""
+    Surrogate model class to help compute $\beta_\text{eff}$ for a complex pipeline class
+    """
+
+    def __init__(self, coeffs):
+
+        self.coeffs = coeffs
+
+    def fit(self, X, y):
+        raise NotImplementedError
+
+    def predict(self, X):
+        return X @ self.coeffs
+
+    def score(self, X, y):
+        raise NotImplementedError
+
+
+def transform_model(model: Model) -> Model:
+
+    r"""
+    Model transformation function that takes in a Model instance and returns a Model instance transformed
+    to predict from $\Delta$'s for the `monte_carlo` function. Namely, if the model is $f$:
+
+    $$
+    f(\mathbf{t}) = \beta^\intercal\mathbf{t} + \beta_0
+    $$
+
+    then this function returns a model $g$ such that:
+    $$
+    g(\mathbf{t}_2 - \mathbf{t}_1) = \beta_\text{eff}^\intercal(\mathbf{t}_2 - \mathbf{t}_1) = f(\mathbf{t}_2) - f(\mathbf{t}_1)
+    $$
+
+    which is important in the Monte Carlo simulation, where we want energy differences $\Delta E = \mathbf{j}^\intercal\Delta\mathbf{t}$
+    from models trained on an energetic model $E\approx f(\mathbf{t}) = \beta^\intercal\mathbf{t} + \beta_0$.
+
+    For simple models, this is as easy as setting $\beta_0 = 0$. However, for complex pipelines using things like
+    `sklearn.preprocessing.StandardScaler`
+    ([here](https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html)), or
+    `sklearn.decomposition.PCA` ([here](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html)),
+    zero'ing out the mean introduces an artificial intercept.
+
+    For a cluster expansion object that you wish to use in an MC simulation, you can use this transformation:
+
+    ```py
+    from tce.training import ClusterExpansion
+    from tce.monte_carlo import transform_model, monte_carlo
+
+    ce: ClusterExpansion = ...
+    ce.model = transform(ce.model)
+    trajectory = monte_carlo(cluster_expansion=ce, ...)
+    ```
+    """
+
+    if isinstance(model, LimitingRidge):
+        return model
+
+    from_sklearn = model.__class__.__module__.startswith('sklearn')
+    if not from_sklearn:
+        return model
+
+    import sklearn
+    if isinstance(model, sklearn.linear_model._base.LinearModel):
+        model.intercept_ = 0.0
+        return model
+
+    if isinstance(model, sklearn.pipeline.Pipeline):
+
+        # most complicated case, need to calculate an effective β
+
+        # find the final dimension d
+        def _infer_input_dim(pipeline):
+            # scan from the *front*
+            for _, step in pipeline.steps:
+                if hasattr(step, "n_features_in_"):
+                    return step.n_features_in_
+
+            # fallback: try final estimator ONLY if nothing else exists
+            final = pipeline.steps[-1][1]
+            if hasattr(final, "n_features_in_"):
+                return final.n_features_in_
+
+            raise ValueError("Could not infer input dimension.")
+
+        d = _infer_input_dim(model)
+
+        # find effective by plugging in basis vectors
+
+        def _eval_pipeline(pipeline, X):
+            y = pipeline.predict(X)
+            return float(np.asarray(y).reshape(-1)[0])
+
+        x0 = np.zeros((1, d))
+        f0 = _eval_pipeline(model, x0)
+
+        beta = np.zeros(d)
+
+        # probe standard basis
+        for i in range(d):
+            xi = np.zeros((1, d))
+            xi[0, i] = 1.0
+
+            fi = _eval_pipeline(model, xi)
+            beta[i] = fi - f0
+
+        print([step for step in model.steps[:-1]])
+        return SurrogateModel(beta)
+
+    raise NotImplementedError
 
 
 def null_energy_modifier(
@@ -208,8 +321,8 @@ def monte_carlo(
         warnings.warn(
             "Your model object has a non-zero intercept_ attribute. If your intercept is non-zero, the feature "
             "difference calculation will not work, i.e. E_2 - E_1 = (α + βx_2) - (α + βx_1) = β(x_2 - x_1), so your "
-            "incoming model should be intercept-less. You can zero out this intercept by setting "
-            "cluster_expansion.model.intercept_ = 0."
+            "incoming model should be intercept-less. See "
+            "https://muexly.github.io/tce-lib/tce/monte_carlo.html#transform_model"
         )
 
     if steps := getattr(cluster_expansion.model, "steps", False):
@@ -219,9 +332,9 @@ def monte_carlo(
         if getattr(final_step_estimator, "intercept_", 0.0):
             warnings.warn(
                 "Your pipeline object has a non-zero intercept_ attribute in the final step. If your intercept is "
-                "non-zero, the feature difference calculation will not work, i.e. "
-                "E_2 - E_1 = (α + βx_2) - (α + βx_1) = β(x_2 - x_1), so your incoming model should be intercept-less. "
-                "You can zero out this intercept by setting cluster_expansion.model[final_step_name].intercept_ = 0."
+                "non-zero, the feature difference calculation will not work, i.e. E_2 - E_1 = (α + βx_2) - (α + βx_1) "
+                "= β(x_2 - x_1), so your incoming model should be intercept-less. See "
+                "https://muexly.github.io/tce-lib/tce/monte_carlo.html#transform_model"
             )
 
     try:

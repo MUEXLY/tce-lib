@@ -5,9 +5,10 @@ from pathlib import Path
 import pickle
 from dataclasses import dataclass
 from copy import deepcopy
-from sklearn.linear_model import RidgeCV
+from sklearn.linear_model import RidgeCV, LinearRegression, Ridge, Lasso, ElasticNet
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+from sklearn.decomposition import PCA, TruncatedSVD
 
 import pytest
 import numpy as np
@@ -35,10 +36,10 @@ from tce.training import (
     train,
     difference_train
 )
-from tce.topology import symmetrize
+from tce.topology import symmetrize, topological_feature_vector_factory
 from tce.datasets import PresetDataset, Dataset, available_datasets
 from tce.calculator import TCECalculator, ASEProperty
-from tce.monte_carlo import monte_carlo
+from tce.monte_carlo import monte_carlo, transform_model
 
 
 @pytest.fixture
@@ -859,3 +860,81 @@ def test_old_preset_loading_method_warns():
         assert isinstance(p, str)
         with pytest.warns(DeprecationWarning):
             _ = Dataset.from_dir(Path(p))
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        LinearRegression(),
+        LinearRegression(fit_intercept=False),
+        Ridge(),
+        Ridge(fit_intercept=False),
+        Lasso(),
+        Lasso(fit_intercept=False),
+        ElasticNet(),
+        ElasticNet(fit_intercept=False),
+        Pipeline([("reduce", PCA(n_components=2)), ("fit", LinearRegression())]),
+        Pipeline([("reduce", PCA(n_components=2)), ("fit", LinearRegression(fit_intercept=False))]),
+        Pipeline([("scale", StandardScaler()), ("reduce", PCA(n_components=2)), ("fit", LinearRegression())]),
+        Pipeline([("scale", StandardScaler()), ("reduce", PCA(n_components=2)), ("fit", Ridge())]),
+        Pipeline([("scale", StandardScaler()), ("reduce", PCA(n_components=2)), ("fit", Lasso())]),
+        Pipeline([("scale", StandardScaler()), ("reduce", TruncatedSVD(n_components=2)), ("fit", LinearRegression())]),
+        Pipeline([("scale", StandardScaler()), ("reduce", TruncatedSVD(n_components=2)), ("fit", Ridge())]),
+        Pipeline([("scale", StandardScaler()), ("reduce", TruncatedSVD(n_components=2)), ("fit", Lasso())])
+    ]
+)
+def test_energy_diff_transform(model):
+
+    rng = np.random.default_rng(seed=0)
+    fe_cohesive_energy = 4.0
+    cr_cohesive_energy = 3.0
+
+    # just fit some dummy CE using pure Fe, pure Cr, and a 50/50
+    pure_fe = build.bulk("Fe", crystalstructure="bcc", a=3.0, cubic=True).repeat((5, 5, 5))
+    pure_fe.calc = SinglePointCalculator(pure_fe, energy=len(pure_fe) * -fe_cohesive_energy)
+    pure_cr = build.bulk("Cr", crystalstructure="bcc", a=3.0, cubic=True).repeat((5, 5, 5))
+    pure_cr.calc = SinglePointCalculator(pure_cr, energy=len(pure_cr) * -cr_cohesive_energy)
+    mixture = pure_fe.copy()
+    mixture.symbols = rng.choice(["Fe", "Cr"], size=len(mixture))
+    mixture.calc = SinglePointCalculator(
+        mixture,
+        energy=len(mixture) * -0.5 * (fe_cohesive_energy + cr_cohesive_energy)
+    )
+
+    basis = ClusterBasis(
+        lattice_structure=LatticeStructure.BCC,
+        lattice_parameter=3.0,
+        max_adjacency_order=2,
+        max_triplet_order=1
+    )
+    feature_vector_calculator = topological_feature_vector_factory(
+        basis=basis,
+        type_map=np.array(["Cr", "Fe"])
+    )
+    ce = train(
+        configurations=[pure_fe, pure_cr, mixture],
+        basis=basis,
+        feature_computer=feature_vector_calculator,
+        model=model
+    )
+
+
+    new_mixture = pure_fe.copy()
+    new_mixture.symbols = rng.choice(["Fe", "Cr"], size=len(new_mixture))
+    new_mixture.calc = TCECalculator(cluster_expansions={ASEProperty.ENERGY: ce})
+
+    attempt = new_mixture.copy()
+    assert attempt.symbols[5] != attempt.symbols[10]
+    attempt.symbols[5] = new_mixture.symbols[10]
+    attempt.symbols[10] = new_mixture.symbols[5]
+    attempt.calc = TCECalculator(cluster_expansions={ASEProperty.ENERGY: ce})
+
+    energy_diff = attempt.get_potential_energy() - new_mixture.get_potential_energy()
+    assert np.abs(energy_diff) > 1.0e-6
+
+    # from feature vector diff
+    ce.model = transform_model(ce.model)
+    first_feature_vector = feature_vector_calculator(new_mixture)
+    second_feature_vector = feature_vector_calculator(attempt)
+    feature_diff = second_feature_vector - first_feature_vector
+    energy_diff_from_delta = ce.model.predict(feature_diff.reshape(1, -1)).squeeze()
+    assert np.isclose(energy_diff, energy_diff_from_delta), model.__class__.__module__

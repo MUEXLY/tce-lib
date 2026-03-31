@@ -513,7 +513,7 @@ and [leave-one-out cross validation](https://www.statology.org/leave-one-out-cro
 
 """
 
-__version__ = "0.10.3"
+__version__ = "0.11.0"
 __authors__ = ["Jacob Jeffries"]
 
 __url__ = "https://github.com/MUEXLY/tce-lib"

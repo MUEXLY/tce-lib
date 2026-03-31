@@ -140,6 +140,15 @@ def transform_model(model: Model) -> Model:
     ce.model = transform(ce.model)
     trajectory = monte_carlo(cluster_expansion=ce, ...)
     ```
+
+    **IMPORTANT**: This transformation is not possible to write in the general case. We have implemented this for a
+    relatively large set of cases of `sklearn`-derived models, including `sklearn.pipeline.Pipeline`. Do not expect
+    this to work for:
+
+    - custom `tce.training.Model` instances written without `sklearn`
+    - nonlinear models
+
+    In these cases, you will have to likely write a custom transformation function to suit your specific needs.
     """
 
     if isinstance(model, LimitingRidge):

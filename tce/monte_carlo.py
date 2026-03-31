@@ -206,7 +206,6 @@ def transform_model(model: Model) -> Model:
             fi = _eval_pipeline(model, xi)
             beta[i] = fi - f0
 
-        print([step for step in model.steps[:-1]])
         return SurrogateModel(beta)
 
     raise NotImplementedError

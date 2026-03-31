@@ -937,4 +937,4 @@ def test_energy_diff_transform(model):
     second_feature_vector = feature_vector_calculator(attempt)
     feature_diff = second_feature_vector - first_feature_vector
     energy_diff_from_delta = ce.model.predict(feature_diff.reshape(1, -1)).squeeze()
-    assert np.isclose(energy_diff, energy_diff_from_delta), model.__class__.__module__
+    assert np.isclose(energy_diff, energy_diff_from_delta)

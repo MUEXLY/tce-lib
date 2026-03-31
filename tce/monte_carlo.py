@@ -158,12 +158,16 @@ def transform_model(model: Model) -> Model:
     if not from_sklearn:
         return model
 
-    import sklearn
-    if isinstance(model, sklearn.linear_model._base.LinearModel):
-        model.intercept_ = 0.0
+    from sklearn.linear_model._base import LinearModel
+    from sklearn.pipeline import Pipeline
+    if isinstance(model, LinearModel):
+        if hasattr(model, 'intercept_'):
+            model.intercept_ = 0.0
+        else:
+            raise ValueError("Linear model does not have intercept attribute, likely unfitted")
         return model
 
-    if isinstance(model, sklearn.pipeline.Pipeline):
+    if isinstance(model, Pipeline):
 
         # most complicated case, need to calculate an effective β
 

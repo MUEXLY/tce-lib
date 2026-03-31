@@ -50,7 +50,8 @@ dev = [
     "mypy~=1.13.0",
     "pdoc~=15.0.1",
     "scipy-stubs~=1.15.3.0",
-    "scikit-learn~=1.7.1"
+    "scikit-learn~=1.7.1",
+    "scikit-learn-stubs~=0.0.3"
 ]
 examples = [
     "scikit-learn~=1.7.1",

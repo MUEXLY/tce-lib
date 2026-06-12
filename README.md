@@ -12,14 +12,16 @@
 
 <hr>
 
-<p align="left">
-  <a href="https://pypi.org/project/tce-lib/"><img src="https://img.shields.io/pypi/v/tce-lib?color=blue" style="height: 22px;" alt="Stable Version"></a>
-  <a href="https://en.wikipedia.org/wiki/MIT_License"><img src="https://img.shields.io/badge/License-MIT-8A2BE2" style="height: 22px;" alt="Static Badge"></a>
-  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/charliermarsh/ruff/main/assets/badge/v2.json" style="height: 22px;" alt="Linting: Ruff"></a>
-  <a href="https://mypy-lang.org/"><img src="https://www.mypy-lang.org/static/mypy_badge.svg" style="height: 22px;" alt="Checked with mypy"></a>
-  <a href="https://docs.pytest.org/en/stable/"><img src="https://img.shields.io/badge/pytest-tested-blue?logo=pytest" style="height: 22px;" alt="Tested with pytest"></a>
-  <a href="https://deepwiki.com/MUEXLY/tce-lib"><img src="https://deepwiki.com/badge.svg" style="height: 22px;" alt="Ask DeepWiki"></a>
-</p>
+<table>
+  <tr>
+    <td><a href="https://pypi.org/project/tce-lib/"><img src="https://img.shields.io/pypi/v/tce-lib?color=blue" style="height: 22px;" alt="Stable Version"></a></td>
+    <td><a href="https://en.wikipedia.org/wiki/MIT_License"><img src="https://img.shields.io/badge/License-MIT-8A2BE2" style="height: 22px;" alt="Static Badge"></a></td>
+    <td><a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/charliermarsh/ruff/main/assets/badge/v2.json" style="height: 22px;" alt="Linting: Ruff"></a></td>
+    <td><a href="https://mypy-lang.org/"><img src="https://www.mypy-lang.org/static/mypy_badge.svg" style="height: 22px;" alt="Checked with mypy"></a></td>
+    <td><a href="https://docs.pytest.org/en/stable/"><img src="https://img.shields.io/badge/pytest-tested-blue?logo=pytest" style="height: 22px;" alt="Tested with pytest"></a></td>
+    <td><a href="https://deepwiki.com/MUEXLY/tce-lib"><img src="https://deepwiki.com/badge.svg" style="height: 22px;" alt="Ask DeepWiki"></a></td>
+  </tr>
+</table>
 
 <img src="https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/assets/logo.png" alt="tce-lib logo" style="width:50%;height:auto;">
 

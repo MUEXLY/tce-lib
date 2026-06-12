@@ -1,19 +1,19 @@
 # tce-lib
 
 <p>
-  <a href="https://muexly.github.io/tce-lib"><img src="https://img.shields.io/badge/docs-orange?logo=github&logoColor=green&label=gh-pages" style="height: 60px;" alt="Custom shields.io"></a>
-  <a href="https://pypi.org/project/tce-lib/"><img src="https://img.shields.io/pypi/v/tce-lib?color=blue" style="height: 60px;" alt="Stable Version"></a>
-  <a href="https://en.wikipedia.org/wiki/MIT_License"><img src="https://img.shields.io/badge/License-MIT-8A2BE2" style="height: 60px;" alt="Static Badge"></a>
+  <a href="https://muexly.github.io/tce-lib"><img src="https://img.shields.io/badge/docs-orange?logo=github&logoColor=green&label=gh-pages" style="height: 40px;" alt="Custom shields.io"></a>
+  <a href="https://pypi.org/project/tce-lib/"><img src="https://img.shields.io/pypi/v/tce-lib?color=blue" style="height: 40px;" alt="Stable Version"></a>
+  <a href="https://en.wikipedia.org/wiki/MIT_License"><img src="https://img.shields.io/badge/License-MIT-8A2BE2" style="height: 40px;" alt="Static Badge"></a>
 </p>
 
 <p>
-  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/charliermarsh/ruff/main/assets/badge/v2.json" style="height: 60px;" alt="Linting: Ruff"></a>
-  <a href="https://mypy-lang.org/"><img src="https://www.mypy-lang.org/static/mypy_badge.svg" style="height: 60px;" alt="Checked with mypy"></a>
-  <a href="https://docs.pytest.org/en/stable/"><img src="https://img.shields.io/badge/pytest-tested-blue?logo=pytest" style="height: 60px;" alt="Tested with pytest"></a>
+  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/charliermarsh/ruff/main/assets/badge/v2.json" style="height: 40px;" alt="Linting: Ruff"></a>
+  <a href="https://mypy-lang.org/"><img src="https://www.mypy-lang.org/static/mypy_badge.svg" style="height: 40px;" alt="Checked with mypy"></a>
+  <a href="https://docs.pytest.org/en/stable/"><img src="https://img.shields.io/badge/pytest-tested-blue?logo=pytest" style="height: 40px;" alt="Tested with pytest"></a>
 </p>
 
 <p>
-  <a href="https://deepwiki.com/MUEXLY/tce-lib"><img src="https://deepwiki.com/badge.svg" style="height: 60px;" alt="Ask DeepWiki"></a>
+  <a href="https://deepwiki.com/MUEXLY/tce-lib"><img src="https://deepwiki.com/badge.svg" style="height: 40px;" alt="Ask DeepWiki"></a>
 </p>
 
 <img src="https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/assets/logo.png" alt="tce-lib logo" style="width:50%;height:auto;">

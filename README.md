@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://muexly.github.io/tce-lib">
-    <img src="https://img.shields.io/badge/DOCUMENTATION-orange?style=for-the-badge&logo=github&logoColor=white&label=gh--pages" style="height: 45px;" alt="Documentation Website">
+    <img src="https://img.shields.io/badge/docs-orange?logo=github&logoColor=green&label=gh-pages" style="height: 48px;" alt="Documentation Website">
   </a>
 </p>
 

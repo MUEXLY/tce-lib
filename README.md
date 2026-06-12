@@ -1,25 +1,25 @@
 # tce-lib
 
-<div style="display: flex; justify-content: center; margin-bottom: 8px;">
+<p align="center">
   <a href="https://muexly.github.io/tce-lib">
     <img src="https://img.shields.io/badge/docs-orange?logo=github&logoColor=green&label=gh-pages" style="height: 48px;" alt="Documentation Website">
   </a>
-</div>
+</p>
 
-<p align="center" style="margin-top: 0; margin-bottom: 16px;">
+<p align="center">
   <b>tce-lib</b> • An optimized technical configuration engine utility.
 </p>
 
-<hr style="margin-bottom: 16px;">
+<hr>
 
-<div style="display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 12px;">
+<p align="left">
   <a href="https://pypi.org/project/tce-lib/"><img src="https://img.shields.io/pypi/v/tce-lib?color=blue" style="height: 22px;" alt="Stable Version"></a>
   <a href="https://en.wikipedia.org/wiki/MIT_License"><img src="https://img.shields.io/badge/License-MIT-8A2BE2" style="height: 22px;" alt="Static Badge"></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/charliermarsh/ruff/main/assets/badge/v2.json" style="height: 22px;" alt="Linting: Ruff"></a>
   <a href="https://mypy-lang.org/"><img src="https://www.mypy-lang.org/static/mypy_badge.svg" style="height: 22px;" alt="Checked with mypy"></a>
   <a href="https://docs.pytest.org/en/stable/"><img src="https://img.shields.io/badge/pytest-tested-blue?logo=pytest" style="height: 22px;" alt="Tested with pytest"></a>
   <a href="https://deepwiki.com/MUEXLY/tce-lib"><img src="https://deepwiki.com/badge.svg" style="height: 22px;" alt="Ask DeepWiki"></a>
-</div>
+</p>
 
 <img src="https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/assets/logo.png" alt="tce-lib logo" style="width:50%;height:auto;">
 

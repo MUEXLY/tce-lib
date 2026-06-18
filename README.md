@@ -6,10 +6,6 @@
   </a>
 </p>
 
-<p align="center">
-  <b>tce-lib</b> • An optimized technical configuration engine utility.
-</p>
-
 <hr>
 
 <p align="left">

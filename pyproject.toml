@@ -35,7 +35,8 @@ dependencies = [
     "scipy>=1.6.0, <1.16.0",
     "opt-einsum>=3.0.1, <4.0",
     "ase>=3.10.0, <3.26.0",
-    "aenum>=3.0.0, <3.1.17"
+    "aenum>=3.0.0, <3.1.17",
+    "greek_alphabet==1.0"
 ]
 
 [project.urls]

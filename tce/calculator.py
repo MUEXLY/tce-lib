@@ -23,7 +23,7 @@ from opt_einsum import contract
 from greek_alphabet import Alphabet
 
 from .training import ClusterExpansion, Model
-from .topology import FeatureComputer, topological_feature_vector_factory
+from .topology import FeatureComputer, topological_feature_vector_factory, hash_topology
 from .topology import get_adjacency_tensors
 
 
@@ -133,7 +133,7 @@ class TCECalculatorNew(Calculator):
     neighbor_cutoffs: NDArray[np.floating]
     many_body_features: list[tuple[int, ...]]
     species: list[str]
-    topological_tensors: dict[int, sparse.COO] = field(default_factory=dict)
+    topological_tensors: dict[tuple[str, str], dict[int, sparse.COO]] = field(default_factory=dict)
     feature_groups: dict[int, tuple[int, ...]] = field(init=False)
     type_to_idx: dict[str, int] = field(init=False)
 
@@ -168,7 +168,10 @@ class TCECalculatorNew(Calculator):
         atoms: Atoms
     ) -> NDArray[np.floating]:
 
-        if not self.topological_tensors:
+        topology_key = hash_topology(atoms)
+        topological_tensors = self.topological_tensors.get(topology_key)
+
+        if topological_tensors is None:
 
             tree = KDTree(data=atoms.positions, boxsize=np.diag(atoms.cell))
 
@@ -177,7 +180,7 @@ class TCECalculatorNew(Calculator):
                 tree=tree,
                 cutoffs=self.neighbor_cutoffs
             )
-            self.topological_tensors[2] = adjacency_tensors
+            topological_tensors = {2: adjacency_tensors}
 
             # for many body terms, we need to build the einsum string
             # subscripts are edges in K_m graphs
@@ -207,14 +210,16 @@ class TCECalculatorNew(Calculator):
                     
                     n_body_tensors.append(n_body_tensor)
                 
-                self.topological_tensors[body_order] = sparse.stack(n_body_tensors)
+                topological_tensors[body_order] = sparse.stack(n_body_tensors)
+
+            self.topological_tensors[topology_key] = topological_tensors
 
         symbols = np.array(atoms.get_chemical_symbols())
         indicator_tensor = symbols[:, None] == np.array(self.species)
         indicator_tensor = indicator_tensor.astype(float)
 
         feature_vec = []
-        for body_order, t in self.topological_tensors.items():
+        for body_order, t in topological_tensors.items():
 
             # need to build the cluster count string in terms of the body order here
             # e.g. "nijk,i\alpha,j\beta,k\gamma->i\alpha\beta\gamma"

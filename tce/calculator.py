@@ -23,7 +23,7 @@ from opt_einsum import contract
 from greek_alphabet import Alphabet
 
 from .training import ClusterExpansion, Model
-from .topology import FeatureComputer, topological_feature_vector_factory, hash_topology
+from .topology import FeatureComputer, topological_feature_vector_factory, hash_topology, symmetrize
 from .topology import get_adjacency_tensors
 
 
@@ -140,6 +140,7 @@ class TCECalculatorNew(Calculator):
     def __post_init__(self):
 
         self.feature_groups = defaultdict(list)
+        seen_features: set[tuple[int, ...]] = set()
         for feature in self.many_body_features:
 
             # each feature motif label is size (m choose 2)
@@ -158,6 +159,10 @@ class TCECalculatorNew(Calculator):
                     "where m is an integer"
                 )
 
+            if tuple(sorted(feature)) in seen_features:
+                warnings.warn(f"feature {feature} is a duplicate feature by symmetry")
+            
+            seen_features.add(tuple(sorted(feature)))
             self.feature_groups[(1 + integer_sqrt) // 2].append(feature)
 
         self.type_to_idx = {sym: a for a, sym in enumerate(self.species)}
@@ -210,7 +215,13 @@ class TCECalculatorNew(Calculator):
                     
                     n_body_tensors.append(n_body_tensor)
                 
-                topological_tensors[body_order] = sparse.stack(n_body_tensors)
+                stacked_tensors = sparse.stack(n_body_tensors)
+                difference = symmetrize(stacked_tensors, axes=tuple(range(1, 1 + body_order))) - stacked_tensors
+                if difference.nnz and not np.allclose(difference.data, 0):
+                    raise ValueError(
+                        f"Topological tensors for body order {body_order} are not symmetric in indices 1..{body_order}"
+                    )
+                topological_tensors[body_order] = stacked_tensors
 
             self.topological_tensors[topology_key] = topological_tensors
 
@@ -222,13 +233,14 @@ class TCECalculatorNew(Calculator):
         for body_order, t in topological_tensors.items():
 
             # need to build the cluster count string in terms of the body order here
-            # e.g. "nijk,i\alpha,j\beta,k\gamma->i\alpha\beta\gamma"
+            # e.g. "nijk,iα,jβ,kγ->nαβγ"
+            # n denotes topological feature labels e.g. a (0, 0, 1) triangle
 
-            spatial_indices = ascii_lowercase[:body_order]
-            species_indices = GREEK_ALPHABET[:body_order]
+            latin_indices = ascii_lowercase[:body_order]
+            greek_indices = GREEK_ALPHABET[:body_order]
 
-            input_str = f"n{spatial_indices},{','.join(f'{l}{g}' for l, g in zip(spatial_indices, species_indices))}"
-            output_str = f"n{species_indices}"
+            input_str = f"n{latin_indices},{','.join(f'{l}{g}' for l, g in zip(latin_indices, greek_indices))}"
+            output_str = f"n{greek_indices}"
             einsum_str = f"{input_str}->{output_str}"
             cluster_counts = contract(
                 einsum_str,
@@ -251,4 +263,4 @@ class TCECalculatorNew(Calculator):
             raise ValueError("Please provide an Atoms object")
 
         feature_vec = self.get_feature_vector(atoms)
-        print(feature_vec)
+        return self.models[name].predict(feature_vec.reshape(1, -1)).squeeze()

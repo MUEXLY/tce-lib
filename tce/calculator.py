@@ -136,10 +136,13 @@ class TCECalculatorNew(Calculator):
     topological_tensors: dict[tuple[str, str], dict[int, sparse.COO]] = field(default_factory=dict)
     feature_groups: dict[int, tuple[int, ...]] = field(init=False)
     type_to_idx: dict[str, int] = field(init=False)
+    einsum_strs: dict[int, str] = field(init=False)
+    feature_vector_size: int = field(init=False)
 
     def __post_init__(self):
 
         self.feature_groups = defaultdict(list)
+        self.einsum_strs = {2: "nij,iα,jβ->nαβ"}
         seen_features: set[tuple[int, ...]] = set()
         for feature in self.many_body_features:
 
@@ -165,13 +168,28 @@ class TCECalculatorNew(Calculator):
             seen_features.add(tuple(sorted(feature)))
             self.feature_groups[(1 + integer_sqrt) // 2].append(feature)
 
+        # Pre-compute einsum strings for each body order
+        for body_order in self.feature_groups.keys():
+            latin_indices = ascii_lowercase[:body_order]
+            greek_indices = GREEK_ALPHABET[:body_order]
+            input_str = f"n{latin_indices},{','.join(f'{l}{g}' for l, g in zip(latin_indices, greek_indices))}"
+            output_str = f"n{greek_indices}"
+            self.einsum_strs[body_order] = f"{input_str}->{output_str}"
+
+        # Pre-compute feature vector size
+        num_species = len(self.species)
+        self.feature_vector_size = len(self.neighbor_cutoffs) * (num_species ** 2)
+        
+        # For body_order >= 3, the number of features is len(feature_groups[body_order])
+        for body_order in self.feature_groups.keys():
+            if body_order >= 3:
+                num_features = len(self.feature_groups[body_order])
+                self.feature_vector_size += num_features * (num_species ** body_order)
+
         self.type_to_idx = {sym: a for a, sym in enumerate(self.species)}
 
-
-    def get_feature_vector(
-        self,
-        atoms: Atoms
-    ) -> NDArray[np.floating]:
+    
+    def get_topological_tensors(self, atoms: Atoms) -> dict[int, sparse.COO]:
 
         topology_key = hash_topology(atoms)
         topological_tensors = self.topological_tensors.get(topology_key)
@@ -186,12 +204,6 @@ class TCECalculatorNew(Calculator):
                 cutoffs=self.neighbor_cutoffs
             )
             topological_tensors = {2: adjacency_tensors}
-
-            # for many body terms, we need to build the einsum string
-            # subscripts are edges in K_m graphs
-            # for three bodies, 12,23,31->123 in graph K_3
-            # for four bodies, 12,23,34,41,13,24->1234 in graph K_4
-            # i.e., combinations of string "abcd"
 
             for body_order, features in self.feature_groups.items():
                 
@@ -225,31 +237,36 @@ class TCECalculatorNew(Calculator):
 
             self.topological_tensors[topology_key] = topological_tensors
 
+        return topological_tensors
+
+
+    def get_feature_vector(
+        self,
+        atoms: Atoms
+    ) -> NDArray[np.floating]:
+
+        topological_tensors = self.get_topological_tensors(atoms)
+
         symbols = np.array(atoms.get_chemical_symbols())
         indicator_tensor = symbols[:, None] == np.array(self.species)
         indicator_tensor = indicator_tensor.astype(float)
 
-        feature_vec = []
+        # Pre-allocate feature vector
+        feature_vec = np.zeros(self.feature_vector_size, dtype=np.float64)
+        pos = 0
+        
         for body_order, t in topological_tensors.items():
-
-            # need to build the cluster count string in terms of the body order here
-            # e.g. "nijk,iα,jβ,kγ->nαβγ"
-            # n denotes topological feature labels e.g. a (0, 0, 1) triangle
-
-            latin_indices = ascii_lowercase[:body_order]
-            greek_indices = GREEK_ALPHABET[:body_order]
-
-            input_str = f"n{latin_indices},{','.join(f'{l}{g}' for l, g in zip(latin_indices, greek_indices))}"
-            output_str = f"n{greek_indices}"
-            einsum_str = f"{input_str}->{output_str}"
+            einsum_str = self.einsum_strs[body_order]
             cluster_counts = contract(
                 einsum_str,
                 t,
                 *repeat(indicator_tensor, body_order)
             )
-            feature_vec.append(cluster_counts.flatten())
+            flattened = cluster_counts.flatten()
+            feature_vec[pos:pos+len(flattened)] = flattened
+            pos += len(flattened)
 
-        return np.concatenate(feature_vec)
+        return feature_vec
 
 
     def get_property(

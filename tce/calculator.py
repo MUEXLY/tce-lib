@@ -22,7 +22,7 @@ from scipy.spatial import KDTree
 from opt_einsum import contract
 from greek_alphabet import Alphabet
 
-from .training import ClusterExpansion, Model
+from .training import ClusterExpansion, Model, LimitingRidge
 from .topology import FeatureComputer, topological_feature_vector_factory, hash_topology, symmetrize
 from .topology import get_adjacency_tensors
 
@@ -35,6 +35,8 @@ class ASEProperty(Enum):
 
     r"""
     supported ASE properties to compute
+
+    Deprecated: This enum is only used by the legacy `TCECalculator` wrapper.
     """
 
     ENERGY = auto()
@@ -45,25 +47,39 @@ STR_TO_PROPERTY: dict[str, ASEProperty] = {
     "energy": ASEProperty.ENERGY,
     "stress": ASEProperty.STRESS
 }
-r"""mapping from ase's string to our Enum class for properties"""
+r"""mapping from ase's string to our Enum class for properties
+
+Deprecated: Only used by the legacy `TCECalculator` wrapper."""
 
 INTENSIVE_PROPERTIES: set[ASEProperty] = {
     ASEProperty.STRESS
 }
-r"""set of intensive properties"""
+r"""set of intensive properties
+
+Deprecated: Only used by the legacy `TCECalculator` wrapper."""
 
 
 @dataclass
-class TCECalculator(Calculator):
+class TCECalculatorOld(Calculator):
 
     """
     ASE calculator wrapper for `tce-lib`.
+
+    Deprecated: This class is deprecated and will be removed in a future release. Use
+    `TCECalculator` instead.
     """
 
     cluster_expansions: dict[ASEProperty, ClusterExpansion]
     feature_computers: dict[ASEProperty, FeatureComputer] = field(init=False)
 
     def __post_init__(self):
+
+        warnings.warn(
+            f"{self.__class__.__name__} is deprecated and will be removed in a future release. "
+            "Use TCECalculator or another supported ASE calculator wrapper instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         for e1, e2 in pairwise(self.cluster_expansions.values()):
             if e1.cluster_basis != e2.cluster_basis:
@@ -127,12 +143,12 @@ class TCECalculator(Calculator):
 
 
 @dataclass
-class TCECalculatorNew(Calculator):
+class TCECalculator(Calculator):
 
-    models: dict[str, Model]
     neighbor_cutoffs: NDArray[np.floating]
     many_body_features: list[tuple[int, ...]]
     species: list[str]
+    models: dict[str, Model] = field(default_factory=dict)
     topological_tensors: dict[tuple[str, str], dict[int, sparse.COO]] = field(default_factory=dict)
     feature_groups: dict[int, tuple[int, ...]] = field(init=False)
     type_to_idx: dict[str, int] = field(init=False)
@@ -140,6 +156,9 @@ class TCECalculatorNew(Calculator):
     feature_vector_size: int = field(init=False)
 
     def __post_init__(self):
+
+        if not self.models:
+            self.models = {"energy": LimitingRidge()}
 
         self.feature_groups = defaultdict(list)
         self.einsum_strs = {2: "nij,iα,jβ->nαβ"}
@@ -257,13 +276,13 @@ class TCECalculatorNew(Calculator):
         
         for body_order, t in topological_tensors.items():
             einsum_str = self.einsum_strs[body_order]
-            cluster_counts = contract(
+            cluster_counts = sparse.einsum(
                 einsum_str,
                 t,
                 *repeat(indicator_tensor, body_order)
             )
             flattened = cluster_counts.flatten()
-            feature_vec[pos:pos+len(flattened)] = flattened
+            feature_vec[pos:pos+len(flattened)] = flattened.todense()
             pos += len(flattened)
 
         return feature_vec
@@ -281,3 +300,10 @@ class TCECalculatorNew(Calculator):
 
         feature_vec = self.get_feature_vector(atoms)
         return self.models[name].predict(feature_vec.reshape(1, -1)).squeeze()
+
+    def train(self, configurations: list[Atoms]):
+
+        feature_matrix = np.array([self.get_feature_vector(atoms) for atoms in configurations])
+        for name, model in self.models.items():
+            target = np.array([atoms.calc.get_property(name) for atoms in configurations])
+            self.models[name].fit(feature_matrix, target)

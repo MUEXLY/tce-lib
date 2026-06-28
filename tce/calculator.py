@@ -225,11 +225,8 @@ class TCECalculator(Calculator):
             topological_label = (neighbor_order,)
             for species_indices in product(range(num_species), repeat=2):
                 species_multiset = tuple(
-                    sorted(
-                        (self.species[idx] for idx in species_indices),
-                        key=self.type_to_idx.__getitem__
+                        (self.species[idx] for idx in species_indices)
                     )
-                )
                 labels.append((topological_label, species_multiset))
 
         # Many-body features follow in the same order as `get_topological_tensors`.
@@ -240,10 +237,7 @@ class TCECalculator(Calculator):
                 topological_label = tuple(sorted(feature))
                 for species_indices in product(range(num_species), repeat=body_order):
                     species_multiset = tuple(
-                        sorted(
-                            (self.species[idx] for idx in species_indices),
-                            key=self.type_to_idx.__getitem__
-                        )
+                        (self.species[idx] for idx in species_indices)
                     )
                     labels.append((topological_label, species_multiset))
 

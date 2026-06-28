@@ -5,7 +5,7 @@ this module provides an `ase.calculator.Calculator` class that wraps `tce-lib`
 
 from dataclasses import dataclass, field
 from typing import Optional
-from itertools import pairwise, permutations, combinations, repeat
+from itertools import pairwise, permutations, combinations, repeat, product
 from enum import Enum, auto
 import logging
 from collections import defaultdict
@@ -207,7 +207,48 @@ class TCECalculator(Calculator):
 
         self.type_to_idx = {sym: a for a, sym in enumerate(self.species)}
 
-    
+    def get_feature_label_order(self) -> list[tuple[tuple[int, ...], tuple[str, ...]]]:
+
+        r"""
+        Returns the ordered feature labels corresponding to the flattened feature vector.
+
+        Each feature label is returned as a tuple of two multisets:
+        - the first multiset is the topological feature label (sorted adjacency indices),
+        - the second multiset is the species types in the feature.
+        """
+
+        labels: list[tuple[tuple[int, ...], tuple[str, ...]]] = []
+        num_species = len(self.species)
+
+        # Two-body features are always present and correspond to the adjacency tensor block.
+        for neighbor_order in range(len(self.neighbor_cutoffs)):
+            topological_label = (neighbor_order,)
+            for species_indices in product(range(num_species), repeat=2):
+                species_multiset = tuple(
+                    sorted(
+                        (self.species[idx] for idx in species_indices),
+                        key=self.type_to_idx.__getitem__
+                    )
+                )
+                labels.append((topological_label, species_multiset))
+
+        # Many-body features follow in the same order as `get_topological_tensors`.
+        for body_order, features in self.feature_groups.items():
+            if body_order < 3:
+                continue
+            for feature in features:
+                topological_label = tuple(sorted(feature))
+                for species_indices in product(range(num_species), repeat=body_order):
+                    species_multiset = tuple(
+                        sorted(
+                            (self.species[idx] for idx in species_indices),
+                            key=self.type_to_idx.__getitem__
+                        )
+                    )
+                    labels.append((topological_label, species_multiset))
+
+        return labels
+
     def get_topological_tensors(self, atoms: Atoms) -> dict[int, sparse.COO]:
 
         topology_key = hash_topology(atoms)

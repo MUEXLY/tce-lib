@@ -288,9 +288,15 @@ class TCECalculator(Calculator):
                         f"Topological tensors for body order {body_order} are not symmetric in indices 1..{body_order}"
                     )
                 topological_tensors[body_order] = stacked_tensors
-
+            
+            topological_tensors[2] = sparse.COO(
+                coords=topological_tensors[2].coords,
+                data=topological_tensors[2].data.astype(np.int64),
+                shape=topological_tensors[2].shape
+            )
             self.topological_tensors[topology_key] = topological_tensors
 
+        print(topological_tensors)
         return topological_tensors
 
 

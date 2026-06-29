@@ -296,7 +296,6 @@ class TCECalculator(Calculator):
             )
             self.topological_tensors[topology_key] = topological_tensors
 
-        print(topological_tensors)
         return topological_tensors
 
 

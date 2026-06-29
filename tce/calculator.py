@@ -148,6 +148,7 @@ class TCECalculator(Calculator):
     neighbor_cutoffs: NDArray[np.floating]
     many_body_features: list[tuple[int, ...]]
     species: list[str]
+    neighbor_tolerance: float = 0.01
     models: dict[str, Model] = field(default_factory=dict)
     topological_tensors: dict[tuple[str, str], dict[int, sparse.COO]] = field(default_factory=dict)
     feature_groups: dict[int, tuple[int, ...]] = field(init=False)
@@ -255,7 +256,8 @@ class TCECalculator(Calculator):
             # these are boolean, so we can sum corresponding to logical or
             adjacency_tensors = get_adjacency_tensors(
                 tree=tree,
-                cutoffs=self.neighbor_cutoffs
+                cutoffs=self.neighbor_cutoffs,
+                tolerance=self.neighbor_tolerance
             )
             topological_tensors = {2: adjacency_tensors}
 

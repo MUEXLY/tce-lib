@@ -1,27 +1,35 @@
 from pathlib import Path
 import logging
 import sys
+import pickle
 
 import numpy as np
 from ase import io, build
 
-from tce.training import ClusterExpansion
-from tce.monte_carlo import monte_carlo
+#from tce.training import ClusterExpansion
+#from tce.monte_carlo import monte_carlo
 
 
 def main():
 
     rng = np.random.default_rng(seed=0)
 
-    cluster_expansion = ClusterExpansion.load(Path("CuNi.pkl"))
+    #cluster_expansion = ClusterExpansion.load(Path("CuNi.pkl"))
 
     atoms = build.bulk(
-        cluster_expansion.type_map[0],
-        a=cluster_expansion.cluster_basis.lattice_parameter,
-        crystalstructure=cluster_expansion.cluster_basis.lattice_structure.name.lower(),
+        "Cu",
+        a=3.56,
+        crystalstructure="bcc",
         cubic=True
     ).repeat((10, 10, 10))
-    atoms.symbols = rng.choice(cluster_expansion.type_map, size=len(atoms))
+    atoms.symbols = rng.choice(["Cu", "Ni"], size=len(atoms))
+
+    with open("copper_nickel_tce.pkl", "rb") as file:
+        calc = pickle.load(file)
+    
+    atoms.calc = calc
+    print(f"Initial energy: {atoms.get_potential_energy()} eV")
+    raise ValueError
 
     trajectory = monte_carlo(
         initial_configuration=atoms,

@@ -1,12 +1,14 @@
 from pathlib import Path
+import pickle
 
 from ase import build
 from ase.calculators.eam import EAM
 import numpy as np
 import requests
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
 
-from tce.constants import LatticeStructure, ClusterBasis
-from tce.training import train
+from tce.calculator import TCECalculator
 
 
 # from https://doi.org/10.1016/j.actamat.2019.06.027
@@ -15,15 +17,13 @@ EAM_POTENTIAL_URL = "https://www.ctcms.nist.gov/potentials/Download/2019--Fische
 
 def main():
 
-    lattice_parameter = 3.56
-    lattice_structure = LatticeStructure.BCC
     species = np.array(["Cu", "Ni"])
     generator = np.random.default_rng(seed=0)
 
     atoms = build.bulk(
         name=species[0],
-        crystalstructure=lattice_structure.name.lower(),
-        a=lattice_parameter,
+        crystalstructure="bcc",
+        a=3.56,
         cubic=True
     ).repeat((3, 3, 3))
 
@@ -46,19 +46,40 @@ def main():
                 file.write(response.text)
 
         configuration.calc = EAM(potential=potential)
+        configuration.get_potential_energy()
         configurations.append(configuration)
 
-    cluster_expansion = train(
-        configurations=configurations,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=3,
-            max_triplet_order=2
-        )
+    calc = TCECalculator(
+        neighbor_cutoffs=[3.08, 3.56, 5.03],
+        many_body_features=[
+            (0, 0, 1),
+            (0, 0, 2)
+        ],
+        species=species
     )
 
-    cluster_expansion.save(Path("CuNi.pkl"))
+    train, test = train_test_split(configurations, test_size=0.2, random_state=0)
+
+    calc.train(train)
+
+    train_energies_actual = [t.get_potential_energy() for t in train]
+    train_energies_predicted = [calc.get_potential_energy(t) for t in train]
+    plt.scatter(train_energies_actual, train_energies_predicted, label="train", zorder=7)
+
+    test_energies_actual = [t.get_potential_energy() for t in test]
+    test_energies_predicted = [calc.get_potential_energy(t) for t in test]
+    plt.scatter(test_energies_actual, test_energies_predicted, label="test", zorder=8)
+
+    plt.xlabel("actual energy (eV)")
+    plt.ylabel("predicted energy (eV)")
+    plt.legend()
+    plt.grid()
+    gca = plt.gca()
+    plt.plot(gca.get_xlim(), gca.get_xlim(), ls="--", color="black")
+    plt.savefig("out.png")
+
+    with open("copper_nickel_tce.pkl", "wb") as file:
+        pickle.dump(calc, file)
 
 
 if __name__ == "__main__":

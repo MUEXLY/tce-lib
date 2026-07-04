@@ -244,6 +244,7 @@ class TCECalculator(Calculator):
 
         return labels
 
+
     def get_topological_tensors(self, atoms: Atoms) -> dict[int, sparse.COO]:
 
         topology_key = hash_topology(atoms)
@@ -343,9 +344,22 @@ class TCECalculator(Calculator):
         feature_vec = self.get_feature_vector(atoms)
         return self.models[name].predict(feature_vec.reshape(1, -1)).squeeze()
 
+
     def train(self, configurations: list[Atoms]):
+
+        r"""
+        Fit each configured model from a list of atomic configurations.
+
+        Each configuration is expected to expose an ASE calculator with a
+        ``get_property`` method for every model key in ``self.models``.
+        """
 
         feature_matrix = np.array([self.get_feature_vector(atoms) for atoms in configurations])
         for name, model in self.models.items():
-            target = np.array([atoms.calc.get_property(name) for atoms in configurations])
-            self.models[name].fit(feature_matrix, target)
+            target = np.array([
+                atoms.calc.get_property(name=name, atoms=atoms)
+                for atoms in configurations
+            ])
+            self.models[name] = model.fit(feature_matrix, target)
+
+        return self

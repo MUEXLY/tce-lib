@@ -15,6 +15,7 @@ import warnings
 
 from ase.calculators.calculator import Calculator
 from ase import Atoms
+from ase.data import atomic_numbers
 import numpy as np
 from numpy.typing import NDArray
 import sparse
@@ -150,6 +151,7 @@ class TCECalculator(Calculator):
     species: list[str]
     neighbor_tolerance: float = 0.01
     models: dict[str, Model] = field(default_factory=dict)
+    atomic_numbers: NDArray[np.int64] = field(init=False)
     topological_tensors: dict[tuple[str, str], dict[int, sparse.COO]] = field(default_factory=dict)
     feature_groups: dict[int, tuple[int, ...]] = field(init=False)
     type_to_idx: dict[str, int] = field(init=False)
@@ -160,6 +162,8 @@ class TCECalculator(Calculator):
 
         if not self.models:
             self.models = {"energy": LimitingRidge()}
+
+        self.atomic_numbers = np.array([atomic_numbers[sym] for sym in self.species], dtype=np.int64)
 
         self.feature_groups = defaultdict(list)
         self.einsum_strs = {2: "nij,iα,jβ->nαβ"}
@@ -309,8 +313,8 @@ class TCECalculator(Calculator):
 
         topological_tensors = self.get_topological_tensors(atoms)
 
-        symbols = np.array(atoms.get_chemical_symbols())
-        indicator_tensor = symbols[:, None] == np.array(self.species)
+        #symbols = np.array(atoms.get_chemical_symbols())
+        indicator_tensor = atoms.numbers[:, None] == self.atomic_numbers[None, :]
         indicator_tensor = indicator_tensor.astype(float)
 
         # Pre-allocate feature vector
@@ -340,12 +344,12 @@ class TCECalculator(Calculator):
         if not np.all(np.isclose(initial.positions, final.positions)):
             raise ValueError("positions of the two configurations differ")
 
-        symbols = np.array(initial.get_chemical_symbols())
-        indicator_tensor = symbols[:, None] == np.array(self.species)
+        #symbols = np.array(initial.get_chemical_symbols())
+        indicator_tensor = initial.numbers[:, None] == self.atomic_numbers[None, :]
         X_init = indicator_tensor.astype(float)
 
-        symbols = np.array(final.get_chemical_symbols())
-        indicator_tensor = symbols[:, None] == np.array(self.species)
+        #symbols = np.array(final.get_chemical_symbols())
+        indicator_tensor = final.numbers[:, None] == self.atomic_numbers[None, :]
         X_final = indicator_tensor.astype(float)
 
         sites, _ = np.where(X_init != X_final)

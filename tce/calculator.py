@@ -166,7 +166,7 @@ class TCECalculator(Calculator):
         self.atomic_numbers = np.array([atomic_numbers[sym] for sym in self.species], dtype=np.int64)
 
         self.feature_groups = defaultdict(list)
-        self.einsum_strs = {2: "nij,iα,jβ->nαβ"}
+        self.einsum_strs = {2: "Lij,iα,jβ->Lαβ"}
         seen_features: set[tuple[int, ...]] = set()
         for feature in self.many_body_features:
 
@@ -196,8 +196,8 @@ class TCECalculator(Calculator):
         for body_order in self.feature_groups.keys():
             latin_indices = ascii_lowercase[:body_order]
             greek_indices = GREEK_ALPHABET[:body_order]
-            input_str = f"n{latin_indices},{','.join(f'{l}{g}' for l, g in zip(latin_indices, greek_indices))}"
-            output_str = f"n{greek_indices}"
+            input_str = f"L{latin_indices},{','.join(f'{l}{g}' for l, g in zip(latin_indices, greek_indices))}"
+            output_str = f"L{greek_indices}"
             self.einsum_strs[body_order] = f"{input_str}->{output_str}"
 
         # Pre-compute feature vector size

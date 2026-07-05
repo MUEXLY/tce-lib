@@ -8,7 +8,7 @@ from typing import Optional
 from itertools import pairwise, permutations, combinations, repeat, product
 from enum import Enum, auto
 import logging
-from collections import defaultdict
+from collections import defaultdict, Counter
 from string import ascii_lowercase
 from math import isqrt
 import warnings
@@ -329,6 +329,109 @@ class TCECalculator(Calculator):
             pos += len(flattened)
 
         return feature_vec
+
+
+    def get_feature_vector_difference_two_cycle(
+        self,
+        initial: Atoms,
+        final: Atoms
+    ) -> NDArray[np.floating]:
+
+        if not np.all(np.isclose(initial.positions, final.positions)):
+            raise ValueError("positions of the two configurations differ")
+
+        symbols = np.array(initial.get_chemical_symbols())
+        indicator_tensor = symbols[:, None] == np.array(self.species)
+        X_init = indicator_tensor.astype(float)
+
+        symbols = np.array(final.get_chemical_symbols())
+        indicator_tensor = symbols[:, None] == np.array(self.species)
+        X_final = indicator_tensor.astype(float)
+
+        sites, _ = np.where(X_init != X_final)
+        sites = np.unique(sites)
+        assert len(sites) == 2
+
+        feature_vec_diff = np.zeros(self.feature_vector_size, dtype=np.float64)
+        topological_tensors = self.get_topological_tensors(initial)
+        pos = 0
+
+        for body_order, t in topological_tensors.items():
+            einsum_str = self.einsum_strs[body_order]
+            truncated = sparse.take(t, sites, axis=1)
+
+            initial_truncated = body_order * symmetrize(contract(
+                einsum_str,
+                truncated,
+                X_init[sites, :],
+                *repeat(X_init, body_order - 1)
+            ), axes=tuple(range(1, 1 + body_order)))
+            final_truncated = body_order * symmetrize(contract(
+                einsum_str,
+                truncated,
+                X_final[sites, :],
+                *repeat(X_final, body_order - 1)
+            ), axes=tuple(range(1, 1 + body_order)))
+
+            flattened = (final_truncated - initial_truncated).flatten()
+            if hasattr(flattened, "todense"):
+                flattened = flattened.todense()
+            feature_vec_diff[pos:pos + len(flattened)] = np.asarray(flattened).reshape(-1)
+            pos += len(flattened)
+
+        return feature_vec_diff
+
+
+    def get_feature_vector_difference(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
+
+        if Counter(initial.numbers) != Counter(final.numbers):
+            raise ValueError("initial and final configurations must have the same composition (for now)")
+
+        mismatch = initial.numbers != final.numbers
+        num_sites_changed = np.sum(mismatch)
+
+        if num_sites_changed == 0:
+            return np.zeros(self.feature_vector_size, dtype=np.float64)
+
+        if num_sites_changed == 2:
+            return self.get_feature_vector_difference_two_cycle(initial, final)
+
+        warnings.warn(
+            "More than two sites changed. Decomposing into two-particle swaps. "
+            "This is potentially slow, and it may be better to decompose into two-cycles analytically instead of using this function.",
+            UserWarning
+        )
+
+        # decompose into two-particle swaps
+        swaps = []
+        current = initial.numbers.copy()
+        target = final.numbers.copy()
+        while mismatch.any():
+
+            i = int(np.flatnonzero(mismatch)[0])
+
+            needed = target[i]
+            displaced = current[i]
+
+            candidates = np.flatnonzero(
+                mismatch & (current == needed)
+            )
+
+            reciprocal = candidates[target[candidates] == displaced]
+
+            j = int(reciprocal[0] if len(reciprocal) else candidates[0])
+            swaps.append((i, j))
+
+            current[[i, j]] = current[[j, i]]
+            mismatch[[i, j]] = current[[i, j]] != target[[i, j]]
+
+        total_feature_diff = np.zeros(self.feature_vector_size, dtype=np.float64)
+        for i, j in swaps:
+            intermediate = initial.copy()
+            intermediate.numbers[[i, j]] = intermediate.numbers[[j, i]]
+            total_feature_diff += self.get_feature_vector_difference_two_cycle(initial, intermediate)
+            initial = intermediate
+        return total_feature_diff
 
 
     def get_property(

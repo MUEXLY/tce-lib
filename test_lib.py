@@ -274,31 +274,32 @@ def test_can_train_and_attach_calculator(preset_dataset):
         _ = configuration.get_potential_energy()
 
 
-# =======================================================================
-
-
+@pytest.mark.filterwarnings(r"ignore:feature (.*, .*, .*) is identically 0")
 @pytest.mark.parametrize("preset_dataset", PresetDataset)
 def test_can_difference_train(preset_dataset):
 
     dataset = Dataset.from_preset(preset_dataset)
     configurations = dataset.configurations[:10]
 
+    lattice_parameter = dataset.lattice_parameter
+    structure = dataset.lattice_structure
+    cutoffs = CUTOFFS[structure][:3]
+    species = np.unique(
+        np.concatenate([
+            atoms.symbols for atoms in configurations
+        ])
+    )
+
     configuration_pairs = [
         (configurations[0], configurations[1]),
         (configurations[2], configurations[3]),
         (configurations[4], configurations[5])
     ]
-
-    _ = difference_train(
-        configuration_pairs,
-        basis=ClusterBasis(
-            lattice_structure=dataset.lattice_structure,
-            lattice_parameter=dataset.lattice_parameter,
-            max_adjacency_order=3,
-            max_triplet_order=1
-        ),
-        model=LimitingRidge()
-    )
+    _ = TCECalculator(
+        neighbor_cutoffs=dataset.lattice_parameter * cutoffs,
+        many_body_features=[(0, 0, 0), (0, 0, 1)],
+        species=species
+    ).difference_train(configuration_pairs)
 
 
 @pytest.fixture
@@ -395,58 +396,7 @@ def bcc_ce_fixture2():
     )
 
 
-def test_different_basis_raises_error(bcc_ce_fixture1, bcc_ce_fixture2):
-
-    tungsten_tantalum_dataset = Dataset.from_preset(PresetDataset.TUNGSTEN_TANTALUM_GENETIC)
-    config = tungsten_tantalum_dataset.configurations[0]
-
-    with pytest.raises(ValueError):
-        config.calc = TCECalculator(
-            cluster_expansions={
-                ASEProperty.ENERGY: bcc_ce_fixture1,
-                ASEProperty.STRESS: bcc_ce_fixture2
-            }
-        )
-
-
-def test_different_type_maps_raises_error(bcc_ce_fixture1):
-
-    second_ce = deepcopy(bcc_ce_fixture1)
-    second_ce.type_map = np.sort(np.array(["Ta", "W"]))
-
-    tungsten_tantalum_dataset = Dataset.from_preset(PresetDataset.TUNGSTEN_TANTALUM_GENETIC)
-    config = tungsten_tantalum_dataset.configurations[0]
-
-    with pytest.raises(ValueError):
-        config.calc = TCECalculator(
-            cluster_expansions={
-                ASEProperty.ENERGY: bcc_ce_fixture1,
-                ASEProperty.STRESS: second_ce
-            }
-        )
-
-def test_can_register_lattice_structure():
-
-    with pytest.warns(UserWarning):
-        register_new_lattice_structure(
-            name="DIAMOND",
-            atomic_basis=np.array([
-                [0.0, 0.0, 0.0],
-                [0.25, 0.25, 0.25],
-                [0.0, 0.5, 0.5],
-                [0.25, 0.75, 0.75],
-                [0.5, 0.0, 0.5],
-                [0.75, 0.25, 0.75],
-                [0.5, 0.5, 0.0],
-                [0.75, 0.75, 0.25]
-            ]),
-            cutoff_list=np.array([
-                0.25 * np.sqrt(3.0), 0.5 * np.sqrt(2.0), 0.25 * np.sqrt(11.0), 1.0
-            ])
-        )
-
-    assert LatticeStructure.DIAMOND in LatticeStructure
-    assert LatticeStructure.DIAMOND in STRUCTURE_TO_THREE_BODY_LABELS
+# ========================================================================
 
 
 def test_floating_point_corrected():

@@ -534,6 +534,36 @@ class TCECalculator(Calculator):
 
         return self
 
+
+    def difference_train(self, configuration_pairs: list[tuple[Atoms, Atoms]]):
+
+        for pair in configuration_pairs:
+            assert len(pair[0]) == len(pair[1])
+
+        feature_matrix = np.array([
+            self.get_feature_vector(initial) \
+            - self.get_feature_vector(final)
+            for initial, final in configuration_pairs
+        ])
+        num_atoms = np.array([len(atoms) for atoms, _ in configuration_pairs])
+
+        for name, model in self.models.items():
+
+            target = np.array([
+                initial.calc.get_property(name=name, atoms=initial) \
+                - final.calc.get_property(name=name, atoms=final)
+                for initial, final in configuration_pairs
+            ])
+            if self.intensive[name]:
+                self.models[name].fit(
+                    feature_matrix / num_atoms[:, None],
+                    target
+                )
+            else:
+                self.models[name].fit(feature_matrix, target)
+
+        return self
+
     def save(self, path: Union[Path, str]):
 
         if isinstance(path, str):

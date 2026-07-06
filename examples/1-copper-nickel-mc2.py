@@ -61,7 +61,7 @@ def main():
     with open("copper_nickel_tce.pkl", "rb") as f:
         calculator = pickle.load(f)
 
-    chemical_potentials_cu = np.linspace(-0.5, 1.5, 25)
+    chemical_potentials_cu = np.linspace(0.5, 1.2, 25)
     atomic_fractions_cu = np.zeros_like(chemical_potentials_cu)
 
     pure_ni = build.bulk(

@@ -22,6 +22,7 @@ import sparse
 from scipy.spatial import KDTree
 from opt_einsum import contract
 from greek_alphabet import Alphabet
+from multiset import Multiset
 
 from .training import ClusterExpansion, Model, LimitingRidge
 from .topology import FeatureComputer, topological_feature_vector_factory, hash_topology, symmetrize
@@ -335,26 +336,25 @@ class TCECalculator(Calculator):
         return feature_vec
 
 
-    def get_feature_vector_difference_two_cycle(
+    def _get_feature_vector_difference_for_sites(
         self,
         initial: Atoms,
-        final: Atoms
+        final: Atoms,
+        sites: NDArray[np.int64] | list[int]
     ) -> NDArray[np.floating]:
 
         if not np.all(np.isclose(initial.positions, final.positions)):
             raise ValueError("positions of the two configurations differ")
 
-        #symbols = np.array(initial.get_chemical_symbols())
         indicator_tensor = initial.numbers[:, None] == self.atomic_numbers[None, :]
         X_init = indicator_tensor.astype(float)
 
-        #symbols = np.array(final.get_chemical_symbols())
         indicator_tensor = final.numbers[:, None] == self.atomic_numbers[None, :]
         X_final = indicator_tensor.astype(float)
 
-        sites, _ = np.where(X_init != X_final)
-        sites = np.unique(sites)
-        assert len(sites) == 2
+        sites = np.asarray(sites, dtype=np.int64)
+        if len(sites) == 0:
+            return np.zeros(self.feature_vector_size, dtype=np.float64)
 
         feature_vec_diff = np.zeros(self.feature_vector_size, dtype=np.float64)
         topological_tensors = self.get_topological_tensors(initial)
@@ -386,10 +386,36 @@ class TCECalculator(Calculator):
         return feature_vec_diff
 
 
-    def get_feature_vector_difference(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
+    def get_feature_vector_difference_two_cycle(
+        self,
+        initial: Atoms,
+        final: Atoms
+    ) -> NDArray[np.floating]:
 
-        if Counter(initial.numbers) != Counter(final.numbers):
-            raise ValueError("initial and final configurations must have the same composition (for now)")
+        sites, _ = np.where(initial.numbers[:, None] != final.numbers[:, None])
+        sites = np.unique(sites)
+        assert len(sites) == 2
+
+        return self._get_feature_vector_difference_for_sites(initial, final, sites)
+
+
+    def get_feature_vector_difference_transmutation(
+        self,
+        initial: Atoms,
+        final: Atoms
+    ) -> NDArray[np.floating]:
+
+        sites = np.flatnonzero(initial.numbers != final.numbers)
+        if len(sites) != 1:
+            raise ValueError("transmutation feature differences require exactly one changed site")
+
+        return self._get_feature_vector_difference_for_sites(initial, final, sites)
+
+
+    def get_feature_vector_difference_nvt(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
+
+        # in the NVT ensemble, any move is a permutation
+        # and any permutation can be decomposed into two-cycles
 
         mismatch = initial.numbers != final.numbers
         num_sites_changed = np.sum(mismatch)
@@ -400,13 +426,14 @@ class TCECalculator(Calculator):
         if num_sites_changed == 2:
             return self.get_feature_vector_difference_two_cycle(initial, final)
 
+        # if there's more than 2 sites changed, we can decompose the permutation into two-cycles
+        # this is potentially slow for a large permutation
         warnings.warn(
             "More than two sites changed. Decomposing into two-particle swaps. "
             "This is potentially slow, and it may be better to decompose into two-cycles analytically instead of using this function.",
             UserWarning
         )
 
-        # decompose into two-particle swaps
         swaps = []
         current = initial.numbers.copy()
         target = final.numbers.copy()
@@ -435,7 +462,24 @@ class TCECalculator(Calculator):
             intermediate.numbers[[i, j]] = intermediate.numbers[[j, i]]
             total_feature_diff += self.get_feature_vector_difference_two_cycle(initial, intermediate)
             initial = intermediate
+        
         return total_feature_diff
+
+
+    def get_feature_vector_difference(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
+
+        initial_counts = Multiset(initial.numbers)
+        final_counts = Multiset(final.numbers)
+
+        count_diff = len(initial_counts - final_counts)
+
+        if count_diff == 0:
+            return self.get_feature_vector_difference_nvt(initial, final)
+
+        if count_diff == 1:
+            return self.get_feature_vector_difference_transmutation(initial, final)
+
+        raise NotImplementedError
 
 
     def get_property(

@@ -14,7 +14,7 @@ def energy_per_atom(atoms: Atoms) -> float:
 def main():
 
     pipeline = ovito.io.import_file("copper-nickel/frame_*.xyz")
-    pipeline.modifiers.append(nearest_neighbor_topology(num_neighbors=8))
+    pipeline.modifiers.append(nearest_neighbor_topology(num_neighbors=12))
     pipeline.modifiers.append(sro_modifier())
 
     sro_parameters = [data.attributes["sro_12"] for data in pipeline.frames]

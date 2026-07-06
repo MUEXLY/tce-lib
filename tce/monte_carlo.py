@@ -19,6 +19,7 @@ from tce.constants import STRUCTURE_TO_CUTOFF_LISTS
 from tce.topology import get_adjacency_tensors, get_three_body_tensors, get_feature_vector, \
     get_feature_vector_difference
 from tce.training import ClusterExpansion, Model, LimitingRidge
+from tce.calculator import TCECalculator
 
 
 LOGGER = logging.getLogger(__name__)
@@ -392,6 +393,71 @@ def monte_carlo(
         if np.exp(-beta_values[step] * modified_energy) > 1.0 - generator.random():
             LOGGER.debug(f"move accepted with energy difference {energy_diff:.3f}")
             state_matrix = new_state_matrix
+            energy += energy_diff
+
+    return trajectory
+
+
+def monte_carlo_new(
+    initial_configuration: Atoms,
+    tce_calculator: TCECalculator,
+    num_steps: int,
+    beta: float | Sequence[float] | NDArray[np.floating],
+    save_every: int = 1,
+    generator: Optional[np.random.Generator] = None,
+    mc_step: Optional[Callable[[Atoms], Atoms]] = None,
+    energy_modifier: Optional[Callable[[Atoms, Atoms], float]] = None,
+    callback: Optional[Callable[[int, int], None]] = None
+) -> list[Atoms]:
+
+    r"""
+    New Monte Carlo simulation function that uses the `transform_model` function to transform the model to predict
+    from $\Delta$'s. This is a more robust implementation that should work for most models, including pipelines.
+    """
+
+    if not generator:
+        generator = np.random.default_rng(seed=0)
+
+    if not callback:
+        def callback(step_: int, num_steps_: int):
+            LOGGER.info(f"MC step {step_:.0f}/{num_steps_:.0f}")
+
+    if not mc_step:
+        def mc_step(atoms: Atoms) -> Atoms:
+            new_atoms = atoms.copy()
+            i, j = generator.integers(len(atoms), size=2)
+            new_atoms[i].symbol, new_atoms[j].symbol = new_atoms[j].symbol, new_atoms[i].symbol
+            return new_atoms
+
+    if not energy_modifier:
+        def energy_modifier(initial: Atoms, final: Atoms) -> float:
+            return 0.0
+
+    transformed_model = transform_model(tce_calculator.models["energy"])
+
+    energy = transformed_model.predict(
+        tce_calculator.get_feature_vector(initial_configuration)
+    )
+    
+    trajectory = []
+    for step in range(num_steps):
+        callback(step, num_steps)
+
+        if not step % save_every:
+            to_save = initial_configuration.copy()
+            to_save.info["energy"] = energy
+            trajectory.append(to_save)
+            LOGGER.info(f"saved configuration at step {step:.0f}/{num_steps:.0f}")
+
+        new_configuration = mc_step(initial_configuration)
+        feature_diff = tce_calculator.get_feature_vector_difference(
+            initial_configuration, new_configuration
+        )
+        energy_diff = transformed_model.predict(feature_diff)
+        energy_diff += energy_modifier(initial_configuration, new_configuration)
+        if np.exp(-beta * energy_diff) > 1.0 - generator.random():
+            LOGGER.debug(f"move accepted with energy difference {energy_diff:.3f}")
+            initial_configuration = new_configuration
             energy += energy_diff
 
     return trajectory

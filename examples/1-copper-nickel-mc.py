@@ -6,34 +6,27 @@ import pickle
 import numpy as np
 from ase import io, build
 
-#from tce.training import ClusterExpansion
-#from tce.monte_carlo import monte_carlo
+from tce.monte_carlo import monte_carlo_new
 
 
 def main():
 
     rng = np.random.default_rng(seed=0)
 
-    #cluster_expansion = ClusterExpansion.load(Path("CuNi.pkl"))
+    with open("copper_nickel_tce.pkl", "rb") as f:
+        calculator = pickle.load(f)
 
     atoms = build.bulk(
         "Cu",
-        a=3.56,
-        crystalstructure="bcc",
+        a=3.6,
+        crystalstructure="fcc",
         cubic=True
     ).repeat((10, 10, 10))
     atoms.symbols = rng.choice(["Cu", "Ni"], size=len(atoms))
 
-    with open("copper_nickel_tce.pkl", "rb") as file:
-        calc = pickle.load(file)
-    
-    atoms.calc = calc
-    print(f"Initial energy: {atoms.get_potential_energy()} eV")
-    raise ValueError
-
-    trajectory = monte_carlo(
+    trajectory = monte_carlo_new(
         initial_configuration=atoms,
-        cluster_expansion=cluster_expansion,
+        tce_calculator=calculator,
         num_steps=10_000,
         beta=19.341,
         save_every=100

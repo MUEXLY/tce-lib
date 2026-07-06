@@ -21,9 +21,9 @@ def main():
     generator = np.random.default_rng(seed=0)
 
     atoms = build.bulk(
-        name=species[0],
-        crystalstructure="bcc",
-        a=3.56,
+        "Cu",
+        crystalstructure="fcc",
+        a=3.6,
         cubic=True
     ).repeat((3, 3, 3))
 
@@ -50,10 +50,14 @@ def main():
         configurations.append(configuration)
 
     calc = TCECalculator(
-        neighbor_cutoffs=[3.08, 3.56, 5.03],
+        neighbor_cutoffs=[
+            0.5 * np.sqrt(2.0) * 3.6, 
+            1.0 * 3.6, 
+            np.sqrt(1.5) * 3.6
+        ],
         many_body_features=[
-            (0, 0, 1),
-            (0, 0, 2)
+            (0, 0, 0),
+            (0, 0, 1)
         ],
         species=species
     )

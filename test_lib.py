@@ -5,15 +5,18 @@ from pathlib import Path
 import pickle
 from dataclasses import dataclass
 from copy import deepcopy
+from itertools import product
+
 from sklearn.linear_model import RidgeCV, LinearRegression, Ridge, Lasso, ElasticNet
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.decomposition import PCA, TruncatedSVD
+from multiset import Multiset
 
 import pytest
 import numpy as np
 from numpy.typing import NDArray
-from ase import build
+from ase import build, Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 import sparse
 
@@ -40,24 +43,30 @@ from tce.topology import symmetrize, topological_feature_vector_factory
 from tce.datasets import PresetDataset, Dataset, available_datasets
 from tce.calculator import TCECalculator, ASEProperty
 from tce.monte_carlo import monte_carlo, transform_model
+from tce.constants import CUTOFFS
 
 
 @pytest.fixture
-def get_supercell() -> Callable[[], Supercell]:
+def get_supercell() -> Callable[[], Atoms]:
 
-    def supercell(lattice_structure: LatticeStructure) -> Supercell:
+    def supercell(lattice_structure: str) -> Atoms:
 
         size = None
-        if lattice_structure == LatticeStructure.SC:
+        if lattice_structure == "sc":
             size = (5, 5, 5)
-        if lattice_structure == LatticeStructure.BCC:
+        if lattice_structure == "bcc":
             size = (4, 4, 4)
-        if lattice_structure == LatticeStructure.FCC:
+        if lattice_structure == "fcc":
             size = (3, 3, 3)
         if not size:
-            raise ValueError("lattice_structure must be SC, BCC, or FCC")
+            raise ValueError("lattice_structure must be sc, bcc, or fcc")
 
-        return Supercell(lattice_structure, lattice_parameter=1.0, size=size)
+        return build.bulk(
+            "X",
+            a=1.0,
+            crystalstructure=lattice_structure, 
+            cubic=True
+        ).repeat(size)
 
     return supercell
 
@@ -65,59 +74,68 @@ def get_supercell() -> Callable[[], Supercell]:
 @pytest.mark.parametrize(
     "lattice_structure, num_expected_neighbors",
     [
-        (LatticeStructure.SC, 6),
-        (LatticeStructure.BCC, 8),
-        (LatticeStructure.FCC, 12)
+        ("sc", 6),
+        ("bcc", 8),
+        ("fcc", 12)
     ]
 )
-def test_num_neighbors(lattice_structure: LatticeStructure, num_expected_neighbors: int, get_supercell):
+def test_num_neighbors(lattice_structure: str, num_expected_neighbors: int, get_supercell):
 
-    with pytest.warns(DeprecationWarning):
-        supercell = get_supercell(lattice_structure)
+    supercell = get_supercell(lattice_structure)
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS[lattice_structure][:1],
+        many_body_features=[],
+        species="X"
+    )
+    calc.get_feature_vector(supercell)
+    
+    topological_tensors, = calc.topological_tensors.values()
+    adjacency_tensor = topological_tensors[2]
 
-    for adj in supercell.adjacency_tensors(max_order=1):
-        assert adj.sum(axis=0).todense().mean() == num_expected_neighbors
+    coord_numbers = adjacency_tensor.sum(axis=1)
+    assert np.isclose(coord_numbers.std(), 0.0)
+    assert coord_numbers.mean() == num_expected_neighbors
 
 
-@pytest.mark.parametrize("lattice_structure", [LatticeStructure.SC, LatticeStructure.BCC, LatticeStructure.FCC])
-def test_feature_vector_shortcut(lattice_structure: LatticeStructure, get_supercell):
+@pytest.mark.filterwarnings("ignore:More than two sites changed")
+@pytest.mark.parametrize(
+    "lattice_structure, permutation_support_size", 
+    list(product(
+        ["sc", "bcc", "fcc"], 
+        range(2, 10)
+    ))
+)
+def test_feature_vector_shortcut(
+    lattice_structure: str,
+    permutation_support_size: int,
+    get_supercell
+):
 
     rng = np.random.default_rng(seed=0)
-    num_types = 3
-
-    with pytest.warns(DeprecationWarning):
-        supercell = get_supercell(lattice_structure)
-
-    types = rng.integers(num_types, size=supercell.num_sites)
-
-    state_matrix = np.zeros((supercell.num_sites, num_types), dtype=int)
-    state_matrix[np.arange(supercell.num_sites), types] = 1
-
-    new_state_matrix = state_matrix.copy()
-    first_site, second_site = rng.integers(supercell.num_sites, size=2)
-    while types[first_site] == types[second_site]:
-        first_site, second_site = rng.integers(supercell.num_sites, size=2)
-    new_state_matrix[first_site, :] = state_matrix[second_site, :]
-    new_state_matrix[second_site, :] = state_matrix[first_site, :]
-
-    clever_diff = supercell.clever_feature_diff(
-        state_matrix, new_state_matrix,
-        max_adjacency_order=2, max_triplet_order=2
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS[lattice_structure][:1],
+        many_body_features=[],
+        species=["Pt", "Au", "Po"]
     )
 
-    feature_vector = supercell.feature_vector(
-        state_matrix,
-        max_adjacency_order=2,
-        max_triplet_order=2
-    )
-    new_feature_vector = supercell.feature_vector(
-        new_state_matrix,
-        max_adjacency_order=2,
-        max_triplet_order=2
-    )
-    naive_diff = new_feature_vector - feature_vector
+    supercell = get_supercell(lattice_structure)
+    supercell.symbols = rng.choice(calc.species, size=len(supercell))
 
-    assert np.all(naive_diff == clever_diff)
+    # Sample a unique set of sites so the reassignment is a true permutation.
+    sites_to_permute = rng.choice(
+        len(supercell),
+        size=permutation_support_size,
+        replace=False
+    )
+    permutation = rng.permutation(sites_to_permute)
+
+    permuted = supercell.copy()
+    permuted.symbols[sites_to_permute] = permuted.symbols[permutation]
+
+    feature_diff = calc.get_feature_vector_difference(supercell, permuted)
+    naive_diff = calc.get_feature_vector(permuted) - calc.get_feature_vector(supercell)
+    
+    assert np.linalg.norm(feature_diff - naive_diff, ord=np.inf) == 0
 
 
 def test_noncubic_cell_raises_value_error():
@@ -127,82 +145,33 @@ def test_noncubic_cell_raises_value_error():
         build.bulk("Cr", crystalstructure="bcc", a=2.7, cubic=False).repeat((3, 3, 3))
     ]
     for configuration in configurations:
-        configuration.calc = SinglePointCalculator(configuration, energy=-1.0)
+        configuration.info["energy"] = -1.0
 
-    with pytest.raises(ValueError, match=NON_CUBIC_CELL_MESSAGE):
-        _ = tce.training.train(
-            configurations=configurations,
-            basis=ClusterBasis(
-                lattice_structure=LatticeStructure.BCC,
-                lattice_parameter=2.7,
-                max_adjacency_order=3,
-                max_triplet_order=1
-            )
-        )
+    calc = TCECalculator(
+        neighbor_cutoffs=[0.5 * np.sqrt(3.0) * 2.7],
+        many_body_features=[],
+        species=["Fe", "Cr"]
+    )
+
+    with pytest.raises(ValueError):
+       calc.train(configurations)
 
 
-def test_inconsistent_geometry_raises_value_error():
-
-    configurations = [
-        build.bulk("Fe", crystalstructure="bcc", a=2.7, cubic=True).repeat((2, 2, 2)),
-        build.bulk("Fe", crystalstructure="fcc", a=2.7, cubic=True).repeat((3, 3, 3))
-    ]
-
-    for configuration in configurations:
-        configuration.calc = SinglePointCalculator(configuration, energy=-1.0)
-
-    with pytest.raises(ValueError, match=INCOMPATIBLE_GEOMETRY_MESSAGE):
-        _ = tce.training.train(
-            configurations=configurations,
-            basis=ClusterBasis(
-                lattice_structure=LatticeStructure.BCC,
-                lattice_parameter=2.7,
-                max_adjacency_order=3,
-                max_triplet_order=1
-            )
-        )
-
-
-def test_no_energy_computation_raises_value_error():
+def test_no_energy_computation_raises_attribute_error():
 
     configurations = [
         build.bulk("Fe", crystalstructure="bcc", a=2.7, cubic=True).repeat((2, 2, 2)),
         build.bulk("Cr", crystalstructure="bcc", a=2.7, cubic=True).repeat((3, 3, 3))
     ]
 
-    with pytest.raises(ValueError, match=NO_POTENTIAL_ENERGY_MESSAGE):
-        _ = tce.training.train(
-            configurations=configurations,
-            basis=ClusterBasis(
-                lattice_structure=LatticeStructure.BCC,
-                lattice_parameter=2.7,
-                max_adjacency_order=3,
-                max_triplet_order=1
-            )
-        )
+    calc = TCECalculator(
+        neighbor_cutoffs=[0.5 * np.sqrt(3.0) * 2.7],
+        many_body_features=[],
+        species=["Fe", "Cr"]
+    )
 
-
-def test_large_system_in_training(monkeypatch):
-
-    with monkeypatch.context() as m:
-
-        m.setattr("tce.training.LARGE_SYSTEM_THRESHOLD", 10)
-
-        configurations = [
-            build.bulk("Fe", crystalstructure="bcc", a=2.7, cubic=True).repeat((2, 2, 2)),
-        ]
-        configurations[0].calc = SinglePointCalculator(configurations[0], energy=-1.0)
-
-        with pytest.warns(UserWarning, match=re.escape(LARGE_SYSTEM_MESSAGE)):
-            _ = tce.training.train(
-                configurations=configurations,
-                basis=ClusterBasis(
-                    lattice_structure=LatticeStructure.BCC,
-                    lattice_parameter=2.7,
-                    max_adjacency_order=3,
-                    max_triplet_order=1
-                )
-            )
+    with pytest.raises(AttributeError):
+        calc.train(configurations)
 
 
 @pytest.mark.parametrize("preset_dataset", PresetDataset)
@@ -249,25 +218,21 @@ def test_can_write_and_read_model():
     y = np.array([2, 4, 6])
     lr = LimitingRidge().fit(X, y)
 
-    ce = ClusterExpansion(
-        model=lr,
-        cluster_basis=ClusterBasis(
-            lattice_structure=LatticeStructure.BCC,
-            lattice_parameter=2.7,
-            max_adjacency_order=3,
-            max_triplet_order=1
-        ),
-        type_map=np.array(["Fe", "Cr"])
+    calc = TCECalculator(
+        models={"energy": lr},
+        neighbor_cutoffs=2.7 * CUTOFFS["bcc"][:3],
+        many_body_features=[(0, 0, 1)],
+        species=np.array(["Fe", "Cr"])
     )
 
     with TemporaryDirectory() as directory:
         temp_path = Path(directory) / "model.pkl"
         with pytest.warns(UserWarning):
-            ce.save(temp_path)
-            ce_new = ClusterExpansion.load(temp_path)
+            calc.save(temp_path)
+            calc_new = TCECalculator.load(temp_path)
 
-    assert ce_new.cluster_basis == ce.cluster_basis
-    assert np.all(ce_new.model.coef_ == ce.model.coef_)
+    assert calc_new.einsum_strs == calc.einsum_strs
+    assert np.all(calc_new.models["energy"].coef_ == calc.models["energy"].coef_)
 
 
 def test_bad_pkl_object():
@@ -277,42 +242,39 @@ def test_bad_pkl_object():
         with temp_path.open("wb") as f:
             pickle.dump(object(), f)
         with pytest.raises(ValueError), pytest.warns(UserWarning):
-            _ = ClusterExpansion.load(temp_path)
+            _ = TCECalculator.load(temp_path)
 
 
-@pytest.mark.parametrize("lattice_structure", LatticeStructure)
-def test_computed_labels_equal_cached_labels(lattice_structure: LatticeStructure):
-
-    cached = STRUCTURE_TO_THREE_BODY_LABELS[lattice_structure]
-    loaded = get_three_body_labels(lattice_structure)
-
-    assert np.all(cached == loaded)
-
-
+@pytest.mark.filterwarnings(r"ignore:feature (.*, .*, .*) is identically 0")
 @pytest.mark.parametrize("preset_dataset", PresetDataset)
 def test_can_train_and_attach_calculator(preset_dataset):
 
     dataset = Dataset.from_preset(preset_dataset)
     configurations = dataset.configurations[:10]
-    ce = train(
-        configurations,
-        basis=ClusterBasis(
-            lattice_structure=dataset.lattice_structure,
-            lattice_parameter=dataset.lattice_parameter,
-            max_adjacency_order=3,
-            max_triplet_order=1
-        ),
-        model=LimitingRidge()
+
+    species = np.unique(
+        np.concatenate([
+            atoms.symbols for atoms in configurations
+        ])
     )
 
-    for configuration in configurations:
-        configuration.calc = TCECalculator(
-            cluster_expansions={ASEProperty.ENERGY: ce}
-        )
+    lattice_parameter = dataset.lattice_parameter
+    structure = dataset.lattice_structure
+    cutoffs = CUTOFFS[structure][:3]
+
+    calc = TCECalculator(
+        neighbor_cutoffs=dataset.lattice_parameter * cutoffs,
+        many_body_features=[(0, 0, 0), (0, 0, 1)],
+        species=species
+    ).train(configurations)
 
     for configuration in configurations:
+        configuration.calc = calc
         assert isinstance(configuration.calc, TCECalculator)
         _ = configuration.get_potential_energy()
+
+
+# =======================================================================
 
 
 @pytest.mark.parametrize("preset_dataset", PresetDataset)

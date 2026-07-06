@@ -4,7 +4,7 @@ this module provides an `ase.calculator.Calculator` class that wraps `tce-lib`
 
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 from itertools import pairwise, permutations, combinations, repeat, product
 from enum import Enum, auto
 import logging
@@ -12,6 +12,8 @@ from collections import defaultdict, Counter
 from string import ascii_lowercase
 from math import isqrt
 import warnings
+from pathlib import Path
+import pickle
 
 from ase.calculators.calculator import Calculator
 from ase import Atoms
@@ -260,6 +262,9 @@ class TCECalculator(Calculator):
         topological_tensors = self.topological_tensors.get(topology_key)
 
         if topological_tensors is None:
+            
+            if not np.all(atoms.cell.angles() == 90):
+                raise ValueError("supercells must be orthogonal (for now)")
 
             tree = KDTree(data=atoms.positions, boxsize=np.diag(atoms.cell))
 
@@ -528,3 +533,31 @@ class TCECalculator(Calculator):
                 self.models[name] = model.fit(feature_matrix, target)
 
         return self
+
+    def save(self, path: Union[Path, str]):
+
+        if isinstance(path, str):
+            path = Path(path)
+
+        warnings.warn(
+            f"{self.__class__.__name__} uses pickle for now. This is unsecure! TODO write a serialization method"
+        )
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as file:
+            pickle.dump(self, file)
+
+    
+    @classmethod
+    def load(cls, path: Union[Path, str]) -> "TCECalculator":
+
+        warnings.warn(
+            f"{cls.__name__} uses pickle for now. This is unsecure! TODO write a serialization method"
+        )
+
+        with path.open("rb") as file:
+            obj = pickle.load(file)
+
+        if not isinstance(obj, cls):
+            raise ValueError(f"loaded object is not of type {cls.__name__}")
+        return obj

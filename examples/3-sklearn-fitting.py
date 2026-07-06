@@ -7,21 +7,17 @@ from sklearn.linear_model import Lasso
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 
-from tce.training import train
-from tce.constants import LatticeStructure, ClusterBasis
+from tce.calculator import TCECalculator
 
 
 def main():
 
-    lattice_parameter = 3.56
-    lattice_structure = LatticeStructure.BCC
-    species = np.array(["Cu", "Ni"])
     generator = np.random.default_rng(seed=0)
 
     atoms = build.bulk(
-        name=species[0],
-        crystalstructure=lattice_structure.name.lower(),
-        a=lattice_parameter,
+        "Cu",
+        crystalstructure="fcc",
+        a=3.6,
         cubic=True
     ).repeat((3, 3, 3))
 
@@ -31,12 +27,13 @@ def main():
         configuration = atoms.copy()
         x_cu = generator.random()
         configuration.symbols = generator.choice(
-            a=species,
+            a=["Cu", "Ni"],
             p=[x_cu, 1.0 - x_cu],
             size=len(configuration)
         )
 
         configuration.calc = EAM(potential="Cu_Ni_Fischer_2018.eam.alloy")
+        configuration.get_potential_energy()
         configurations.append(configuration)
 
     alpha_values = np.logspace(-4.0, 3.0, 20)
@@ -44,25 +41,29 @@ def main():
 
     for i, alpha in enumerate(alpha_values):
 
-        pipeline = Pipeline([
-            ("scale", StandardScaler()),
-            ("reduce", PCA()),
-            ("fit", Lasso(alpha=alpha))
-        ])
-
-        cluster_expansion = train(
-            configurations=configurations,
-            basis=ClusterBasis(
-                lattice_structure=LatticeStructure.BCC,
-                lattice_parameter=3.56,
-                max_adjacency_order=3,
-                max_triplet_order=2
-            ),
-            model=pipeline
+        calc = TCECalculator(
+            models={
+                "energy": Pipeline([
+                    ("scale", StandardScaler()),
+                    ("reduce", PCA()),
+                    ("fit", Lasso(alpha=alpha))
+                ])
+            },
+            neighbor_cutoffs=[
+                0.5 * np.sqrt(2.0) * 3.6, 
+                1.0 * 3.6, 
+                np.sqrt(1.5) * 3.6
+            ],
+            many_body_features=[
+                (0, 0, 0),
+                (0, 0, 1)
+            ],
+            species=np.array(["Cu", "Ni"])
         )
+        calc.train(configurations)
 
         prop_considered_clusters[i] = np.logical_not(
-            np.isclose(pipeline["fit"].coef_, 0.0)
+            np.isclose(calc.models["energy"].named_steps["fit"].coef_, 0.0)
         ).mean()
 
     plt.plot(alpha_values, 100 * prop_considered_clusters, color="orchid")

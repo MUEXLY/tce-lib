@@ -151,6 +151,7 @@ class TCECalculator(Calculator):
     many_body_features: list[tuple[int, ...]]
     species: list[str]
     neighbor_tolerance: float = 0.01
+    intensive: dict[str, bool] = field(default_factory=dict)
     models: dict[str, Model] = field(default_factory=dict)
     atomic_numbers: NDArray[np.int64] = field(init=False)
     topological_tensors: dict[tuple[str, str], dict[int, sparse.COO]] = field(default_factory=dict)
@@ -160,6 +161,9 @@ class TCECalculator(Calculator):
     feature_vector_size: int = field(init=False)
 
     def __post_init__(self):
+
+        if not self.intensive:
+            self.intensive = {"energy": True}
 
         if not self.models:
             self.models = {"energy": LimitingRidge()}
@@ -493,6 +497,8 @@ class TCECalculator(Calculator):
             raise ValueError("Please provide an Atoms object")
 
         feature_vec = self.get_feature_vector(atoms)
+        if self.intensive[name]:
+            feature_vec /= len(atoms)
         return self.models[name].predict(feature_vec.reshape(1, -1)).squeeze()
 
 
@@ -506,11 +512,19 @@ class TCECalculator(Calculator):
         """
 
         feature_matrix = np.array([self.get_feature_vector(atoms) for atoms in configurations])
+        num_atoms = np.array([len(atoms) for atoms in configurations])
+
         for name, model in self.models.items():
             target = np.array([
                 atoms.calc.get_property(name=name, atoms=atoms)
                 for atoms in configurations
             ])
-            self.models[name] = model.fit(feature_matrix, target)
+            if self.intensive[name]:            
+                self.models[name] = model.fit(
+                    feature_matrix / num_atoms[:, None], 
+                    target
+                )
+            else:
+                self.models[name] = model.fit(feature_matrix, target)
 
         return self

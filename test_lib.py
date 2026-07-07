@@ -42,7 +42,7 @@ from tce.training import (
 from tce.topology import symmetrize, topological_feature_vector_factory
 from tce.datasets import PresetDataset, Dataset, available_datasets
 from tce.calculator import TCECalculator, ASEProperty
-from tce.monte_carlo import monte_carlo, transform_model
+from tce.monte_carlo import monte_carlo_new, transform_model
 from tce.constants import CUTOFFS
 
 
@@ -398,11 +398,9 @@ def bcc_ce_fixture2():
 
 # ========================================================================
 
-
 def test_floating_point_corrected():
 
     composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
     lattice_parameter = 3.862
     size = (4, 4, 4)
 
@@ -411,7 +409,7 @@ def test_floating_point_corrected():
     type_map = np.array(list(composition.keys()))
     solution = build.bulk(
         type_map[0],
-        crystalstructure=lattice_structure.name.lower(),
+        crystalstructure="fcc",
         cubic=True,
         a=lattice_parameter
     ).repeat(size)
@@ -419,7 +417,7 @@ def test_floating_point_corrected():
 
     @dataclass
     class SurrogateModel:
-        basis: ClusterBasis
+
         coeffs: NDArray[np.floating]
 
         def train(self, X, y):
@@ -429,28 +427,27 @@ def test_floating_point_corrected():
             raise NotImplementedError
 
         def predict(self, x):
-            return np.dot(self.coeffs, x)
+            return np.sum(self.coeffs * x)
 
-    basis = ClusterBasis(
-        lattice_structure=lattice_structure,
-        lattice_parameter=lattice_parameter,
-        max_adjacency_order=2,
-        max_triplet_order=1
+    feature_length = len(type_map) ** 2 * 2 + len(type_map) ** 3 * 1
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:2] * lattice_parameter,
+        many_body_features=[(0, 0, 0)],
+        species=type_map,
+        models={
+            "energy": SurrogateModel(
+                coeffs=rng.normal(
+                    loc=0.0, 
+                    scale=2.5e-3, 
+                    size=(1, feature_length)
+                )
+            )
+        }
     )
-    feature_length = len(type_map) ** 2 * basis.max_adjacency_order + len(type_map) ** 3 * basis.max_triplet_order
 
-    ce = ClusterExpansion(
-        model=SurrogateModel(
-            basis=basis,
-            coeffs=rng.normal(loc=0.0, scale=2.5e-3, size=feature_length)
-        ),
-        cluster_basis=basis,
-        type_map=type_map
-    )
-
-    _ = monte_carlo(
+    _ = monte_carlo_new(
         initial_configuration=solution,
-        cluster_expansion=ce,
+        tce_calculator=calc,
         num_steps=1_000,
         beta=11.1,
         generator=rng
@@ -458,8 +455,8 @@ def test_floating_point_corrected():
 
 
 def test_sklearn_model_in_mc():
+
     composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
     lattice_parameter = 3.862
     size = (4, 4, 4)
 
@@ -470,7 +467,7 @@ def test_sklearn_model_in_mc():
     for _ in range(2):
         solution = build.bulk(
             type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
+            crystalstructure="fcc",
             cubic=True,
             a=lattice_parameter
         ).repeat(size)
@@ -478,28 +475,24 @@ def test_sklearn_model_in_mc():
         solution.calc = SinglePointCalculator(solution, energy=rng.normal())
         solutions.append(solution)
 
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=RidgeCV(fit_intercept=False)
-    )
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:2] * lattice_parameter,
+        many_body_features=[(0, 0, 0)],
+        species=type_map,
+        models={"energy": RidgeCV(fit_intercept=False)}
+    ).train(solutions)
 
-    _ = monte_carlo(
+    _ = monte_carlo_new(
         initial_configuration=solutions[0],
-        cluster_expansion=ce,
+        tce_calculator=calc,
         num_steps=10,
         beta=11.1
     )
 
 
 def test_sklearn_model_with_intercept_warns_in_mc():
+
     composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
     lattice_parameter = 3.862
     size = (4, 4, 4)
 
@@ -510,7 +503,7 @@ def test_sklearn_model_with_intercept_warns_in_mc():
     for _ in range(2):
         solution = build.bulk(
             type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
+            crystalstructure="fcc",
             cubic=True,
             a=lattice_parameter
         ).repeat(size)
@@ -518,71 +511,25 @@ def test_sklearn_model_with_intercept_warns_in_mc():
         solution.calc = SinglePointCalculator(solution, energy=rng.normal())
         solutions.append(solution)
 
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=RidgeCV()
-    )
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:2] * lattice_parameter,
+        many_body_features=[(0, 0, 0)],
+        species=type_map,
+        models={"energy": RidgeCV(fit_intercept=True)}
+    ).train(solutions)
 
     with pytest.warns(UserWarning):
-        _ = monte_carlo(
+        _ = monte_carlo_new(
             initial_configuration=solutions[0],
-            cluster_expansion=ce,
+            tce_calculator=calc,
             num_steps=10,
             beta=11.1
         )
-
-
-def test_sklearn_model_setting_intercept_to_zero_in_mc():
-    composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
-    lattice_parameter = 3.862
-    size = (4, 4, 4)
-
-    rng = np.random.default_rng(seed=0)
-
-    type_map = np.array(list(composition.keys()))
-    solutions = []
-    for _ in range(2):
-        solution = build.bulk(
-            type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
-            cubic=True,
-            a=lattice_parameter
-        ).repeat(size)
-        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
-        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
-        solutions.append(solution)
-
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=RidgeCV()
-    )
-
-    ce.model.intercept_ = 0.0
-
-    _ = monte_carlo(
-        initial_configuration=solutions[0],
-        cluster_expansion=ce,
-        num_steps=10,
-        beta=11.1
-    )
 
 
 def test_sklearn_pipeline_in_mc():
+
     composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
     lattice_parameter = 3.862
     size = (4, 4, 4)
 
@@ -593,7 +540,7 @@ def test_sklearn_pipeline_in_mc():
     for _ in range(2):
         solution = build.bulk(
             type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
+            crystalstructure="fcc",
             cubic=True,
             a=lattice_parameter
         ).repeat(size)
@@ -601,120 +548,32 @@ def test_sklearn_pipeline_in_mc():
         solution.calc = SinglePointCalculator(solution, energy=rng.normal())
         solutions.append(solution)
 
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=Pipeline([
-            ("scale", StandardScaler()),
-            ("fit", RidgeCV(fit_intercept=False))
-        ])
-    )
-
-    _ = monte_carlo(
-        initial_configuration=solutions[0],
-        cluster_expansion=ce,
-        num_steps=10,
-        beta=11.1
-    )
-
-
-def test_sklearn_pipeline_with_intercept_sends_warning_in_mc():
-    composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
-    lattice_parameter = 3.862
-    size = (4, 4, 4)
-
-    rng = np.random.default_rng(seed=0)
-
-    type_map = np.array(list(composition.keys()))
-    solutions = []
-    for _ in range(2):
-        solution = build.bulk(
-            type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
-            cubic=True,
-            a=lattice_parameter
-        ).repeat(size)
-        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
-        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
-        solutions.append(solution)
-
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=Pipeline([
-            ("scale", StandardScaler()),
-            ("fit", RidgeCV())
-        ])
-    )
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:2] * lattice_parameter,
+        many_body_features=[(0, 0, 0)],
+        species=type_map,
+        models={
+            "energy": Pipeline([
+                ("scale", StandardScaler()),
+                ("fit", RidgeCV())
+            ])
+        }
+    ).train(solutions)
 
     with pytest.warns(UserWarning):
-        _ = monte_carlo(
+        _ = monte_carlo_new(
             initial_configuration=solutions[0],
-            cluster_expansion=ce,
+            tce_calculator=calc,
             num_steps=10,
             beta=11.1
         )
 
 
-def test_sklearn_pipeline_setting_intercept_to_zero_in_mc():
-    composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
-    lattice_parameter = 3.862
-    size = (4, 4, 4)
-
-    rng = np.random.default_rng(seed=0)
-
-    type_map = np.array(list(composition.keys()))
-    solutions = []
-    for _ in range(2):
-        solution = build.bulk(
-            type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
-            cubic=True,
-            a=lattice_parameter
-        ).repeat(size)
-        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
-        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
-        solutions.append(solution)
-
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=Pipeline([
-            ("scale", StandardScaler()),
-            ("fit", RidgeCV())
-        ])
-    )
-
-    ce.model["fit"].intercept_ = 0.0
-
-    _ = monte_carlo(
-        initial_configuration=solutions[0],
-        cluster_expansion=ce,
-        num_steps=10,
-        beta=11.1
-    )
-
 @pytest.mark.parametrize("beta", [11.1, [11.1]*10, np.linspace(10.0, 12.0, 10), [11.1, 11.1]])
 def test_annealing_mc(beta):
+
     composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
+    lattice_structure = "fcc"
     lattice_parameter = 3.862
     size = (4, 4, 4)
 
@@ -725,7 +584,7 @@ def test_annealing_mc(beta):
     for _ in range(2):
         solution = build.bulk(
             type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
+            crystalstructure=lattice_structure,
             cubic=True,
             a=lattice_parameter
         ).repeat(size)
@@ -733,45 +592,33 @@ def test_annealing_mc(beta):
         solution.calc = SinglePointCalculator(solution, energy=rng.normal())
         solutions.append(solution)
 
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=RidgeCV(fit_intercept=False)
-    )
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:2] * lattice_parameter,
+        many_body_features=[(0, 0, 0)],
+        species=type_map,
+        models={"energy": RidgeCV(fit_intercept=False)}
+    ).train(solutions)
+    
     if isinstance(beta, list):
         if len(beta) == 2:
             # invalid length, should raise error
             with pytest.raises(AssertionError):
-                _ = monte_carlo(
+                _ = monte_carlo_new(
                     initial_configuration=solutions[0],
-                    cluster_expansion=ce,
+                    tce_calculator=calc,
                     num_steps=10,
                     beta=beta
                 )
             return
 
     # for now, only tests that no error is raised. TODO: check that correct betas are used
-    _ = monte_carlo(
+    _ = monte_carlo_new(
         initial_configuration=solutions[0],
-        cluster_expansion=ce,
+        tce_calculator=calc,
         num_steps=10,
         beta=beta
     )
 
-
-def test_old_preset_loading_method_warns():
-
-    with pytest.warns(DeprecationWarning):
-        dataset_paths = available_datasets()
-    for p in dataset_paths:
-        assert isinstance(p, str)
-        with pytest.warns(DeprecationWarning):
-            _ = Dataset.from_dir(Path(p))
 
 @pytest.mark.parametrize(
     "model",
@@ -812,41 +659,30 @@ def test_energy_diff_transform(model):
         energy=len(mixture) * -0.5 * (fe_cohesive_energy + cr_cohesive_energy)
     )
 
-    basis = ClusterBasis(
-        lattice_structure=LatticeStructure.BCC,
-        lattice_parameter=3.0,
-        max_adjacency_order=2,
-        max_triplet_order=1
-    )
-    feature_vector_calculator = topological_feature_vector_factory(
-        basis=basis,
-        type_map=np.array(["Cr", "Fe"])
-    )
-    ce = train(
-        configurations=[pure_fe, pure_cr, mixture],
-        basis=basis,
-        feature_computer=feature_vector_calculator,
-        model=model
-    )
-
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["bcc"][:2] * 3.0,
+        many_body_features=[(0, 0, 1)],
+        species=["Fe", "Cr"],
+        models={"energy": model}
+    ).train([pure_fe, pure_cr, mixture])
 
     new_mixture = pure_fe.copy()
     new_mixture.symbols = rng.choice(["Fe", "Cr"], size=len(new_mixture))
-    new_mixture.calc = TCECalculator(cluster_expansions={ASEProperty.ENERGY: ce})
+    new_mixture.calc = calc
 
     attempt = new_mixture.copy()
     assert attempt.symbols[5] != attempt.symbols[10]
     attempt.symbols[5] = new_mixture.symbols[10]
     attempt.symbols[10] = new_mixture.symbols[5]
-    attempt.calc = TCECalculator(cluster_expansions={ASEProperty.ENERGY: ce})
+    attempt.calc = calc
 
     energy_diff = attempt.get_potential_energy() - new_mixture.get_potential_energy()
     assert np.abs(energy_diff) > 1.0e-6
 
     # from feature vector diff
-    ce.model = transform_model(ce.model)
-    first_feature_vector = feature_vector_calculator(new_mixture)
-    second_feature_vector = feature_vector_calculator(attempt)
+    calc.models["energy"] = transform_model(calc.models["energy"])
+    first_feature_vector = calc.get_feature_vector(new_mixture)
+    second_feature_vector = calc.get_feature_vector(attempt)
     feature_diff = second_feature_vector - first_feature_vector
-    energy_diff_from_delta = ce.model.predict(feature_diff.reshape(1, -1)).squeeze()
-    assert np.isclose(energy_diff, energy_diff_from_delta)
+    energy_diff_from_delta = calc.models["energy"].predict(feature_diff.reshape(1, -1)).squeeze()
+    assert np.isclose(energy_diff, energy_diff_from_delta), f"{energy_diff}, {energy_diff_from_delta}"

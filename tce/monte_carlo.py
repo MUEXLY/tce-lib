@@ -433,10 +433,29 @@ def monte_carlo_new(
         def energy_modifier(initial: Atoms, final: Atoms) -> float:
             return 0.0
 
+    if isinstance(beta, (Sequence, np.ndarray)):
+        assert len(beta) == num_steps, "if beta is a sequence, it must be the same length as num_steps"
+        beta_values = np.array(beta)
+    elif isinstance(beta, float):
+        beta_values = np.full(num_steps, beta)
+    else:
+        raise TypeError("beta must be either a float or a sequence of floats")
+
+
+    # try to pass zeros into the model
+    zero_feature = np.zeros(tce_calculator.feature_vector_size).reshape(1, -1)
+    predicted = tce_calculator.models["energy"].predict(zero_feature).item()
+    if predicted != 0.0:
+        warnings.warn(
+            "Input model has an intercept, which will mess with energy difference calculations. "
+            "The monte carlo run will automatically zero-out this intercept, transforming your model.",
+            UserWarning
+        )
+        
     transformed_model = transform_model(tce_calculator.models["energy"])
 
     energy = transformed_model.predict(
-        tce_calculator.get_feature_vector(initial_configuration)
+        tce_calculator.get_feature_vector(initial_configuration).reshape(1, -1)
     )
     
     trajectory = []
@@ -452,11 +471,14 @@ def monte_carlo_new(
         new_configuration = mc_step(initial_configuration)
         feature_diff = tce_calculator.get_feature_vector_difference(
             initial_configuration, new_configuration
-        )
+        ).reshape(1, -1)
         energy_diff = transformed_model.predict(feature_diff)
         energy_diff += energy_modifier(initial_configuration, new_configuration)
-        if np.exp(-beta * energy_diff) > 1.0 - generator.random():
-            LOGGER.debug(f"move accepted with energy difference {energy_diff:.3f}")
+
+        if not isinstance(energy_diff, float):
+            energy_diff = energy_diff.item()
+        if np.exp(-beta_values[step] * energy_diff) > 1.0 - generator.random():
+            LOGGER.debug(f"move accepted with energy difference {energy_diff}")
             initial_configuration = new_configuration
             energy += energy_diff
 

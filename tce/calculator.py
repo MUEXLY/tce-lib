@@ -165,7 +165,7 @@ class TCECalculator(Calculator):
     def __post_init__(self):
 
         if not self.intensive:
-            self.intensive = {"energy": True}
+            self.intensive = {"energy": False}
 
         if not self.models:
             self.models = {"energy": LimitingRidge()}
@@ -524,7 +524,7 @@ class TCECalculator(Calculator):
                 atoms.calc.get_property(name=name, atoms=atoms)
                 for atoms in configurations
             ])
-            if self.intensive[name]:            
+            if self.intensive[name]:        
                 self.models[name] = model.fit(
                     feature_matrix / num_atoms[:, None], 
                     target

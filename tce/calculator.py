@@ -45,7 +45,6 @@ class TCECalculator(Calculator):
     atomic_numbers: NDArray[np.int64] = field(init=False)
     topological_tensors: dict[tuple[str, str], dict[int, sparse.COO]] = field(default_factory=dict)
     feature_groups: dict[int, list[tuple[int, ...]]] = field(init=False)
-    type_to_idx: dict[str, int] = field(init=False)
     einsum_strs: dict[int, str] = field(init=False)
     feature_vector_size: int = field(init=False)
 
@@ -108,9 +107,6 @@ class TCECalculator(Calculator):
             if body_order >= 3:
                 num_features = len(self.feature_groups[body_order])
                 self.feature_vector_size += num_features * (num_species ** body_order)
-
-        self.type_to_idx = {sym: a for a, sym in enumerate(self.species)}
-        print(self.feature_groups)
 
     def get_feature_label_order(self) -> list[tuple[tuple[int, ...], tuple[str, ...]]]:
 

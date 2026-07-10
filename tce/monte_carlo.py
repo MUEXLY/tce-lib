@@ -265,7 +265,9 @@ def monte_carlo_new(
 
     # try to pass zeros into the model
     zero_feature = np.zeros(tce_calculator.feature_vector_size).reshape(1, -1)
-    predicted = tce_calculator.models["energy"].predict(zero_feature).item()
+    predicted = tce_calculator.models["energy"].predict(zero_feature)
+    if isinstance(predicted, np.ndarray):
+        predicted = predicted.item()
     if predicted != 0.0:
         warnings.warn(
             "Input model has an intercept, which will mess with energy difference calculations. "
@@ -277,7 +279,9 @@ def monte_carlo_new(
 
     energy = transformed_model.predict(
         tce_calculator.get_feature_vector(initial_configuration).reshape(1, -1)
-    ).item()
+    )
+    if isinstance(energy, np.ndarray):
+        energy = energy.item()
     
     trajectory = []
     for step in range(num_steps):

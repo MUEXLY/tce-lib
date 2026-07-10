@@ -45,7 +45,7 @@ class TCECalculator(Calculator):
     models: dict[str, Model] = field(default_factory=dict)
     atomic_numbers: NDArray[np.int64] = field(init=False)
     topological_tensors: dict[tuple[str, str], dict[int, sparse.COO]] = field(default_factory=dict)
-    feature_groups: dict[int, tuple[int, ...]] = field(init=False)
+    feature_groups: dict[int, list[tuple[int, ...]]] = field(init=False)
     type_to_idx: dict[str, int] = field(init=False)
     einsum_strs: dict[int, str] = field(init=False)
     feature_vector_size: int = field(init=False)
@@ -106,6 +106,7 @@ class TCECalculator(Calculator):
                 self.feature_vector_size += num_features * (num_species ** body_order)
 
         self.type_to_idx = {sym: a for a, sym in enumerate(self.species)}
+        print(self.feature_groups)
 
     def get_feature_label_order(self) -> list[tuple[tuple[int, ...], tuple[str, ...]]]:
 
@@ -122,7 +123,7 @@ class TCECalculator(Calculator):
 
         # Two-body features are always present and correspond to the adjacency tensor block.
         for neighbor_order in range(len(self.neighbor_cutoffs)):
-            topological_label = (neighbor_order,)
+            topological_label: tuple[int, ...] = (neighbor_order,)
             for species_indices in product(range(num_species), repeat=2):
                 species_multiset = tuple(
                         (self.species[idx] for idx in species_indices)
@@ -365,8 +366,8 @@ class TCECalculator(Calculator):
 
     def get_feature_vector_difference(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
 
-        initial_counts = Multiset(initial.numbers)
-        final_counts = Multiset(final.numbers)
+        initial_counts: Multiset = Multiset(initial.numbers)
+        final_counts: Multiset = Multiset(final.numbers)
 
         count_diff = len(initial_counts - final_counts)
 
@@ -392,7 +393,11 @@ class TCECalculator(Calculator):
         feature_vec = self.get_feature_vector(atoms)
         if self.intensive[name]:
             feature_vec /= len(atoms)
-        return self.models[name].predict(feature_vec.reshape(1, -1)).squeeze()
+
+        prop = self.models[name].predict(feature_vec.reshape(1, -1))
+        if isinstance(prop, np.ndarray):
+            prop = prop.squeeze()
+        return prop
 
 
     def train(self, configurations: list[Atoms]):
@@ -472,6 +477,9 @@ class TCECalculator(Calculator):
         warnings.warn(
             f"{cls.__name__} uses pickle for now. This is unsecure! TODO write a serialization method"
         )
+
+        if not isinstance(path, Path):
+            path = Path(path)
 
         with path.open("rb") as file:
             obj = pickle.load(file)

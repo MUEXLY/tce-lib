@@ -124,18 +124,7 @@ def transform_model(model: Model) -> Model:
     `sklearn.preprocessing.StandardScaler`
     ([here](https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html)), or
     `sklearn.decomposition.PCA` ([here](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html)),
-    zero'ing out the mean introduces an artificial intercept.
-
-    For a cluster expansion object that you wish to use in an MC simulation, you can use this transformation:
-
-    ```py
-    from tce.training import ClusterExpansion
-    from tce.monte_carlo import transform_model, monte_carlo
-
-    ce: ClusterExpansion = ...
-    ce.model = transform(ce.model)
-    trajectory = monte_carlo(cluster_expansion=ce, ...)
-    ```
+    zero'ing out the mean introduces an artificial intercept. This function is called automatically by `tce.monte_carlo.monte_carlo` to address this.
 
     **IMPORTANT**: This transformation is not possible to write in the general case. We have implemented this for a
     relatively large set of cases of `sklearn`-derived models, including `sklearn.pipeline.Pipeline`. Do not expect

@@ -147,6 +147,24 @@ class TCECalculator(Calculator):
 
     def get_topological_tensors(self, atoms: Atoms) -> dict[int, sparse.COO]:
 
+        r"""
+        Method to compute topological tensors $T_{i_1\cdots i_m}^{[\ell]}$:
+
+        $$ T^{[\ell]}_{i_1\cdots i_m} = \bigvee_{\ell'\in[\ell]}\prod_{(r, s)\in K_m} A_{i_r i_s}^{(\ell_{rs}')} $$
+
+        where $[\ell] = S_m\cdot\ell$ is the equivalence class of $\ell$ induced by the symmetry group $S_m$, 
+        $K_m$ is the [complete graph](https://en.wikipedia.org/wiki/Complete_graph), and $A_{ij}^{(n)}$ is the $n$'th order
+        adjacency tensor:
+
+        $$ A_{ij}^{(n)} = [\text{sites $i$ and $j$ are $n$'th nearest neighbors}] $$
+
+        This function will cache the adjacency tensor computations according to the positions of the input atoms
+
+        Args:
+            atoms (Atoms):
+                The input atoms to compute the topological tensors for, and store in the parent object's cache
+        """
+
         topology_key = hash_topology(atoms)
         topological_tensors = self.topological_tensors.get(topology_key)
 
@@ -210,6 +228,20 @@ class TCECalculator(Calculator):
         atoms: Atoms
     ) -> NDArray[np.floating]:
 
+        r"""
+        Method to compute cluster counts and store them in a feature vector:
+
+        $$ N_{\alpha_1\cdots\alpha_m}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{i=1}^m X_{i_n\alpha_n} $$
+
+        $$ \mathbf{t} = \bigoplus_{k=1}^m\bigoplus_{[\ell]\in\Lambda_k} \text{vec}\left( N_{\alpha_1\cdots\alpha_k}^{[\ell]} \right) $$
+
+        where $\oplus$ denotes a direct sum over cluster subspaces, i.e. concatenation.
+
+        Args:
+            atoms (Atoms):
+                Configuration to compute the feature vector for
+        """
+
         topological_tensors = self.get_topological_tensors(atoms)
 
         #symbols = np.array(atoms.get_chemical_symbols())
@@ -240,6 +272,17 @@ class TCECalculator(Calculator):
         final: Atoms,
         sites: NDArray[np.int64] | list[int]
     ) -> NDArray[np.floating]:
+
+        r"""
+        Computational shortcut to compute the feature vector $\Delta \mathbf{t}$ for two configurations 
+        that are only separated by a two-cycle, or by one transmutation.
+
+        Args:
+            initial (Atoms):
+                Initial configuration with occupation tensor $\mathbf{X}$
+            final (Atoms):
+                Final configuration with occupation tensor $\mathbf{X}'$
+        """
 
         if not np.all(np.isclose(initial.positions, final.positions)):
             raise ValueError("positions of the two configurations differ")
@@ -290,6 +333,18 @@ class TCECalculator(Calculator):
         final: Atoms
     ) -> NDArray[np.floating]:
 
+        r"""
+        Computational shortcut to compute the feature vector $\Delta \mathbf{t}$ for two configurations 
+        that are only separated by a two-cycle. Namely, if there exists a two-cycle $\pi$ such that $\mathbf{X}' = \pi\mathbf{X}$, 
+        then this method returns a shortcut for $\Delta \mathbf{t} = \mathbf{t}(\mathbf{X}') - \mathbf{t}(\mathbf{X})$.
+
+        Args:
+            initial (Atoms):
+                Initial configuration with occupation tensor $\mathbf{X}$
+            final (Atoms):
+                Final configuration with occupation tensor $\mathbf{X}'$
+        """
+
         sites, _ = np.where(initial.numbers[:, None] != final.numbers[:, None])
         sites = np.unique(sites)
         assert len(sites) == 2
@@ -303,6 +358,17 @@ class TCECalculator(Calculator):
         final: Atoms
     ) -> NDArray[np.floating]:
 
+        r"""
+        Computational shortcut to compute the feature vector $\Delta \mathbf{t}$ for two configurations 
+        that are only separated by a transmutation. Namely, if $\|\mathbf{X}' - \mathbf{X}\|_{2,0} = 1$.
+
+        Args:
+            initial (Atoms):
+                Initial configuration with occupation tensor $\mathbf{X}$
+            final (Atoms):
+                Final configuration with occupation tensor $\mathbf{X}'$
+        """
+
         sites = np.flatnonzero(initial.numbers != final.numbers)
         if len(sites) != 1:
             raise ValueError("transmutation feature differences require exactly one changed site")
@@ -311,6 +377,19 @@ class TCECalculator(Calculator):
 
 
     def get_feature_vector_difference_nvt(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
+
+        r"""
+        Computational shortcut to compute the feature vector $\Delta \mathbf{t}$ for two configurations 
+        that are only separated by a permutation. Any permutation can be written as a composition of two-cycles, so this
+        function decomposes the permutation in the move $\mathbf{X}' = \pi\mathbf{X}$ into two-cycles, and dispatches the calculation 
+        to a series of two-cycle particle swaps.
+
+        Args:
+            initial (Atoms):
+                Initial configuration with occupation tensor $\mathbf{X}$
+            final (Atoms):
+                Final configuration with occupation tensor $\mathbf{X}'$
+        """
 
         # in the NVT ensemble, any move is a permutation
         # and any permutation can be decomposed into two-cycles
@@ -366,6 +445,18 @@ class TCECalculator(Calculator):
 
     def get_feature_vector_difference(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
 
+        r"""
+        Computational shortcut to compute the feature vector $\Delta \mathbf{t}$. This method will 
+        check if the swap should be computed by permutations (canonical ensemble) or transmutations (grand canonical ensemble), 
+        and dispatch accordingly.
+
+        Args:
+            initial (Atoms):
+                Initial configuration with occupation tensor $\mathbf{X}$
+            final (Atoms):
+                Final configuration with occupation tensor $\mathbf{X}'$
+        """
+
         initial_counts: Multiset = Multiset(initial.numbers)
         final_counts: Multiset = Multiset(final.numbers)
 
@@ -407,6 +498,10 @@ class TCECalculator(Calculator):
 
         Each configuration is expected to expose an ASE calculator with a
         ``get_property`` method for every model key in ``self.models``.
+
+        Args:
+            configurations (list[Atoms]):
+                List of atomic configurations to train the calculator on
         """
 
         feature_matrix = np.array([self.get_feature_vector(atoms) for atoms in configurations])
@@ -429,6 +524,26 @@ class TCECalculator(Calculator):
 
 
     def difference_train(self, configuration_pairs: list[tuple[Atoms, Atoms]]):
+
+        r"""
+        Fit each configured model from a list of pairs of atomic configurations.
+
+        Each configuration is expected to expose an ASE calculator with a
+        ``get_property`` method for every model key in ``self.models``.
+
+        This method differs from the ordinary train method in that we difference train, namely fitting a model:
+
+        $$ \Delta p = f(\Delta\mathbf{t}) $$
+
+        where $p$ is any property. This is useful when one would rather predict energy differences over pure energies, 
+        for example when computing energy barriers for vacancy hops as done in our work [here](https://arxiv.org/abs/2605.23612).
+
+        In the case of a linear model $f$, this is equivalent to the ordinary training method, but is more resistant to noise.
+
+        Args:
+            configuration_pairs (list[tuple[Atoms, Atoms]]):
+                Pairs to compute feature vector differences $\Delta \mathbf{t}$ and property differences $\Delta p$
+        """
 
         for pair in configuration_pairs:
             assert len(pair[0]) == len(pair[1])
@@ -459,6 +574,14 @@ class TCECalculator(Calculator):
 
     def save(self, path: Union[Path, str]):
 
+        r"""
+        Method to serialize the calculator using pickle
+
+        Args:
+            path (Union[Path, str]):
+                Path to save the model to
+        """
+
         if isinstance(path, str):
             path = Path(path)
 
@@ -473,6 +596,14 @@ class TCECalculator(Calculator):
     
     @classmethod
     def load(cls, path: Union[Path, str]) -> "TCECalculator":
+
+        r"""
+        Method to load the calculator from a previous serialization
+
+        Args:
+            path (Union[Path, str]):
+                Path to load the model from
+        """
 
         warnings.warn(
             f"{cls.__name__} uses pickle for now. This is unsecure! TODO write a serialization method"

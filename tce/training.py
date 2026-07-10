@@ -15,8 +15,8 @@ import numpy as np
 from numpy.typing import NDArray
 from ase import Atoms
 
-from tce.constants import ClusterBasis, STRUCTURE_TO_ATOMIC_BASIS
-from tce.topology import FeatureComputer, topological_feature_vector_factory
+#from tce.constants import ClusterBasis, STRUCTURE_TO_ATOMIC_BASIS
+#from tce.topology import FeatureComputer, topological_feature_vector_factory
 from tce import __url__
 
 
@@ -86,14 +86,14 @@ def total_energy(atoms: Atoms) -> float:
         raise ValueError(NO_POTENTIAL_ENERGY_MESSAGE) from e
 
 
-def get_data_pairs(
+"""def get_data_pairs(
     configurations: list[Atoms],
     basis: ClusterBasis,
     target_property_computer: PropertyComputer,
     feature_computer: FeatureComputer,
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
 
-    r"""
+    r
     Function to create data pairs, i.e., a sequence of features and target properties $(\mathbf{X}, y)$.
 
     Args:
@@ -107,7 +107,7 @@ def get_data_pairs(
         feature_computer (FeatureComputer):
             feature computer that computes features. If not specified, the feature is set to the topological feature
             vector computed by `tce.topology.topological_feature_vector_factory`.
-    """
+    
 
     basis_atomic_volume = basis.lattice_parameter ** 3 / len(STRUCTURE_TO_ATOMIC_BASIS[basis.lattice_structure])
     for configuration in configurations:
@@ -134,7 +134,7 @@ def get_data_pairs(
         y[index] = target_property_computer(atoms)
         X[index, :] = feature_computer(atoms)
 
-    return X, np.array(y)
+    return X, np.array(y)"""
 
 
 @runtime_checkable
@@ -245,13 +245,13 @@ class LimitingRidge:
         return 1.0 - ss_res / ss_tot
 
 
-@dataclass
+"""@dataclass
 class ClusterExpansion:
 
-    fr"""
+    fr
     Cluster expansion data container, mostly useful for training a model, saving a model, and deploying it elsewhere,
     like in the example [here]({__url__}#training-monte-carlo)
-    """
+    
 
     model: Model
     cluster_basis: ClusterBasis
@@ -259,15 +259,14 @@ class ClusterExpansion:
 
     def save(self, path: Path):
 
-        r"""
+        r
         method to save the model using the pickle library. **WARNING**, this is not a secure method! Only load from a
         source that you really trust.
 
         Args:
             path (Path):
                 path to save the model to
-        """
-
+        
         warnings.warn(
             f"{self.__class__.__name__} uses pickle for now. This is unsecure! TODO write a serialization method"
         )
@@ -277,14 +276,14 @@ class ClusterExpansion:
 
     @classmethod
     def load(cls, path: Path) -> "ClusterExpansion":
-        r"""
+        r
         method to load a serialized model using the pickle library. **WARNING**, this is not a secure method! Only load
         from a source that you really trust.
 
         Args:
             path (Path):
                 path to load the model from
-        """
+        
 
         warnings.warn(
             f"{cls.__name__} uses pickle for now. This is unsecure! TODO write a serialization method"
@@ -295,10 +294,10 @@ class ClusterExpansion:
 
         if not isinstance(obj, cls):
             raise ValueError(f"loaded object is not of type {cls.__name__}")
-        return obj
+        return obj"""
 
 
-def train(
+"""def train(
     configurations: list[Atoms],
     basis: ClusterBasis,
     model: Model = LimitingRidge(),
@@ -306,7 +305,7 @@ def train(
     feature_computer: Optional[FeatureComputer] = None,
 ) -> ClusterExpansion:
 
-    r"""
+    r
     convenience training method wrapper. here, we train on a list of configurations and output a cluster expansion
     model.
 
@@ -323,7 +322,7 @@ def train(
         feature_computer (FeatureComputer, optional):
             feature computer to use when training the model. if not specified, defaults to computing the topological
             feature vector.
-    """
+    
 
     if not target_property_computer:
         LOGGER.debug("target_property_computer not specified, defaulting to computing the total energy")
@@ -347,17 +346,17 @@ def train(
     if logging.NOTSET < LOGGER.level <= logging.DEBUG:
         LOGGER.debug(f"model trained with score {model.score(X, y)}")
 
-    return ClusterExpansion(model=model, cluster_basis=basis, type_map=type_map)
+    return ClusterExpansion(model=model, cluster_basis=basis, type_map=type_map)"""
 
 
-def difference_train(
+"""def difference_train(
     configuration_pairs: list[tuple[Atoms, Atoms]],
     basis: ClusterBasis,
     model: Model = LimitingRidge(),
     target_property_computer: Optional[PropertyComputer] = None,
     feature_computer: Optional[FeatureComputer] = None
 ) -> ClusterExpansion:
-    r"""
+    r
         convenience training method wrapper for difference training. here, we train on a list of configuration pairs
         `(first, second)` and output a cluster expansion model.
 
@@ -375,7 +374,7 @@ def difference_train(
             feature_computer (FeatureComputer, optional):
                 feature computer to use when training the model. if not specified, defaults to computing the topological
                 feature vector.
-        """
+        
 
     if not target_property_computer:
         LOGGER.debug("target_property_computer not specified, defaulting to computing the total energy")
@@ -412,3 +411,4 @@ def difference_train(
         LOGGER.debug(f"model trained with score {model.score(X, y)}")
 
     return ClusterExpansion(model=model, cluster_basis=basis, type_map=type_map)
+"""

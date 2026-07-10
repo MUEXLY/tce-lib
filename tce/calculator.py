@@ -5,10 +5,9 @@ this module provides an `ase.calculator.Calculator` class that wraps `tce-lib`
 
 from dataclasses import dataclass, field
 from typing import Optional, Union
-from itertools import pairwise, permutations, combinations, repeat, product
-from enum import Enum, auto
+from itertools import permutations, combinations, repeat, product
 import logging
-from collections import defaultdict, Counter
+from collections import defaultdict
 from string import ascii_lowercase
 from math import isqrt
 import warnings
@@ -26,124 +25,13 @@ from opt_einsum import contract
 from greek_alphabet import Alphabet
 from multiset import Multiset
 
-from .training import ClusterExpansion, Model, LimitingRidge
-from .topology import FeatureComputer, topological_feature_vector_factory, hash_topology, symmetrize
+from .training import Model, LimitingRidge
+from .topology import hash_topology, symmetrize
 from .topology import get_adjacency_tensors
 
 
 LOGGER = logging.getLogger(__name__)
 GREEK_ALPHABET = ''.join(char.lower for char in Alphabet.get_list())
-
-
-class ASEProperty(Enum):
-
-    r"""
-    supported ASE properties to compute
-
-    Deprecated: This enum is only used by the legacy `TCECalculator` wrapper.
-    """
-
-    ENERGY = auto()
-    STRESS = auto()
-
-
-STR_TO_PROPERTY: dict[str, ASEProperty] = {
-    "energy": ASEProperty.ENERGY,
-    "stress": ASEProperty.STRESS
-}
-r"""mapping from ase's string to our Enum class for properties
-
-Deprecated: Only used by the legacy `TCECalculator` wrapper."""
-
-INTENSIVE_PROPERTIES: set[ASEProperty] = {
-    ASEProperty.STRESS
-}
-r"""set of intensive properties
-
-Deprecated: Only used by the legacy `TCECalculator` wrapper."""
-
-
-@dataclass
-class TCECalculatorOld(Calculator):
-
-    """
-    ASE calculator wrapper for `tce-lib`.
-
-    Deprecated: This class is deprecated and will be removed in a future release. Use
-    `TCECalculator` instead.
-    """
-
-    cluster_expansions: dict[ASEProperty, ClusterExpansion]
-    feature_computers: dict[ASEProperty, FeatureComputer] = field(init=False)
-
-    def __post_init__(self):
-
-        warnings.warn(
-            f"{self.__class__.__name__} is deprecated and will be removed in a future release. "
-            "Use TCECalculator or another supported ASE calculator wrapper instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        for e1, e2 in pairwise(self.cluster_expansions.values()):
-            if e1.cluster_basis != e2.cluster_basis:
-                raise ValueError(f"cluster bases are different in {self.__class__.__name__}")
-            if np.any(e1.type_map != e2.type_map):
-                raise ValueError(f"type maps are different in {self.__class__.__name__}")
-
-        self.feature_computers = {}
-
-        expansion_ids = list(self.cluster_expansions.keys())
-        extensive_feature_computer = topological_feature_vector_factory(
-            basis=self.cluster_expansions[expansion_ids[0]].cluster_basis,
-            type_map=self.cluster_expansions[expansion_ids[0]].type_map,
-        )
-
-        expansion_ids = list(self.cluster_expansions.keys())
-        extensive_feature_computer = topological_feature_vector_factory(
-            basis=self.cluster_expansions[expansion_ids[0]].cluster_basis,
-            type_map=self.cluster_expansions[expansion_ids[0]].type_map,
-        )
-
-        def intensive_feature_computer(atoms: Atoms) -> NDArray:
-
-            return extensive_feature_computer(atoms) / len(atoms)
-
-        for key in expansion_ids:
-            if key in INTENSIVE_PROPERTIES:
-                self.feature_computers[key] = intensive_feature_computer
-                LOGGER.debug(f"intensive feature computer stored for property {key}")
-            else:
-                self.feature_computers[key] = extensive_feature_computer
-                LOGGER.debug(f"extensive feature computer stored for property {key}")
-
-    def get_property(self, name: str, atoms: Optional[Atoms] = None, allow_calculation: bool = True):
-
-        r"""
-        compute property from `ase.Atoms` object
-
-        Args:
-            name (str): name of property
-            atoms (ase.Atoms): atoms object
-            allow_calculation (bool): allow calculation
-        """
-
-        prop = STR_TO_PROPERTY[name]
-        computer = self.feature_computers[prop]
-
-        if atoms is None:
-            raise ValueError("please provide Atoms object")
-
-        x = computer(atoms).reshape(1, -1)
-        model = self.cluster_expansions[prop].model
-        predicted = model.predict(x)
-
-        if isinstance(predicted, np.ndarray):
-            predicted = predicted.squeeze()
-
-        self.results = {name: predicted}
-
-        return predicted
 
 
 @dataclass

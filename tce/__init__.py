@@ -524,7 +524,6 @@ from . import calculator as calculator
 from . import constants as constants
 from . import datasets as datasets
 from . import monte_carlo as monte_carlo
-from . import structures as structures
 from . import topology as topology
 from . import training as training
 

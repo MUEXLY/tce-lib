@@ -1,17 +1,14 @@
 from typing import Callable
-import re
 from tempfile import TemporaryDirectory
 from pathlib import Path
 import pickle
 from dataclasses import dataclass
-from copy import deepcopy
 from itertools import product
 
 from sklearn.linear_model import RidgeCV, LinearRegression, Ridge, Lasso, ElasticNet
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.decomposition import PCA, TruncatedSVD
-from multiset import Multiset
 
 import pytest
 import numpy as np
@@ -20,28 +17,10 @@ from ase import build, Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 import sparse
 
-import tce
-from tce.constants import (
-    LatticeStructure,
-    STRUCTURE_TO_THREE_BODY_LABELS,
-    get_three_body_labels,
-    register_new_lattice_structure
-)
-from tce.structures import Supercell
-from tce.training import (
-    ClusterBasis,
-    INCOMPATIBLE_GEOMETRY_MESSAGE,
-    NO_POTENTIAL_ENERGY_MESSAGE,
-    NON_CUBIC_CELL_MESSAGE,
-    LARGE_SYSTEM_MESSAGE,
-    LimitingRidge,
-    ClusterExpansion,
-    train,
-    difference_train
-)
-from tce.topology import symmetrize, topological_feature_vector_factory
-from tce.datasets import PresetDataset, Dataset, available_datasets
-from tce.calculator import TCECalculator, ASEProperty
+from tce.training import LimitingRidge
+from tce.topology import symmetrize
+from tce.datasets import PresetDataset, Dataset
+from tce.calculator import TCECalculator
 from tce.monte_carlo import monte_carlo_new, transform_model
 from tce.constants import CUTOFFS
 
@@ -300,100 +279,6 @@ def test_can_difference_train(preset_dataset):
         many_body_features=[(0, 0, 0), (0, 0, 1)],
         species=species
     ).difference_train(configuration_pairs)
-
-
-@pytest.fixture
-def bcc_ce_fixture1():
-
-    rng = np.random.default_rng(seed=0)
-
-    basis = ClusterBasis(
-        lattice_structure=LatticeStructure.BCC,
-        lattice_parameter=2.7,
-        max_adjacency_order=3,
-        max_triplet_order=1
-    )
-
-    type_map = np.sort(np.array(["Fe", "Cr"]))
-
-    @dataclass
-    class SurrogateLinearModel:
-        coeff: NDArray
-
-        def fit(self, X, y) -> "SurrogateLinearModel":
-            raise NotImplementedError
-
-        def predict(self, x) -> float:
-            return np.dot(self.coeff, x)
-
-    two_body_coeffs = rng.normal(
-        loc=-0.1,
-        scale=0.03,
-        size=(basis.max_adjacency_order, len(type_map), len(type_map))
-    )
-    two_body_coeffs = symmetrize(two_body_coeffs, axes=(1, 2)).flatten()
-
-    three_body_coeffs = rng.normal(
-        loc=-0.05,
-        scale=0.02,
-        size=(basis.max_triplet_order, len(type_map), len(type_map), len(type_map))
-    )
-    three_body_coeffs = symmetrize(three_body_coeffs, axes=(2, 3)).flatten()
-
-    return ClusterExpansion(
-        model=SurrogateLinearModel(
-            coeff=np.concatenate((two_body_coeffs, three_body_coeffs))
-        ),
-        cluster_basis=basis,
-        type_map=type_map,
-    )
-
-
-@pytest.fixture
-def bcc_ce_fixture2():
-
-    rng = np.random.default_rng(seed=0)
-
-    basis = ClusterBasis(
-        lattice_structure=LatticeStructure.BCC,
-        lattice_parameter=2.7,
-        max_adjacency_order=2,
-        max_triplet_order=1
-    )
-
-    type_map = np.sort(np.array(["Fe", "Cr"]))
-
-    @dataclass
-    class SurrogateLinearModel:
-        coeff: NDArray
-
-        def fit(self, X, y) -> "SurrogateLinearModel":
-            raise NotImplementedError
-
-        def predict(self, x) -> float:
-            return np.dot(self.coeff, x)
-
-    two_body_coeffs = rng.normal(
-        loc=-0.1,
-        scale=0.03,
-        size=(basis.max_adjacency_order, len(type_map), len(type_map))
-    )
-    two_body_coeffs = symmetrize(two_body_coeffs, axes=(1, 2)).flatten()
-
-    three_body_coeffs = rng.normal(
-        loc=-0.05,
-        scale=0.02,
-        size=(basis.max_triplet_order, len(type_map), len(type_map), len(type_map))
-    )
-    three_body_coeffs = symmetrize(three_body_coeffs, axes=(2, 3)).flatten()
-
-    return ClusterExpansion(
-        model=SurrogateLinearModel(
-            coeff=np.concatenate((two_body_coeffs, three_body_coeffs))
-        ),
-        cluster_basis=basis,
-        type_map=type_map,
-    )
 
 
 # ========================================================================

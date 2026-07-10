@@ -21,15 +21,15 @@ def main():
         a=3.6,
         crystalstructure="fcc",
         cubic=True
-    ).repeat((10, 10, 10))
+    ).repeat((15, 15, 15))
     atoms.symbols = rng.choice(["Cu", "Ni"], size=len(atoms))
 
     trajectory = monte_carlo_new(
         initial_configuration=atoms,
         tce_calculator=calculator,
-        num_steps=10_000,
+        num_steps=100_000,
         beta=19.341,
-        save_every=100
+        save_every=1_000
     )
 
     for i, frame in enumerate(trajectory):

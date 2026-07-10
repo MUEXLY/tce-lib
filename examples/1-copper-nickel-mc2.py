@@ -1,4 +1,3 @@
-from pathlib import Path
 import logging
 import sys
 from typing import Callable
@@ -11,7 +10,6 @@ from numpy.typing import NDArray
 import matplotlib.pyplot as plt
 from ase import build, Atoms
 
-from tce.training import ClusterExpansion
 from tce.monte_carlo import monte_carlo_new, MCStep
 
 

@@ -17,7 +17,7 @@ def main():
     pipeline.modifiers.append(nearest_neighbor_topology(num_neighbors=12))
     pipeline.modifiers.append(sro_modifier())
 
-    sro_parameters = [data.attributes["sro_12"] for data in pipeline.frames]
+    sro_parameters = [data.attributes["sro_CuNi"] for data in pipeline.frames]
 
     # sort by number in filename, lexographical sorting done by Path.glob does not work
     paths = list(Path("copper-nickel").glob("frame_*.xyz"))

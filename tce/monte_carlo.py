@@ -277,7 +277,7 @@ def monte_carlo_new(
 
     energy = transformed_model.predict(
         tce_calculator.get_feature_vector(initial_configuration).reshape(1, -1)
-    )
+    ).item()
     
     trajectory = []
     for step in range(num_steps):

@@ -3,6 +3,15 @@ r"""
 
 # Examples
 
+Below is a set of examples to help you quickstart your work 🙂
+
+The basic workflow is:
+
+- Load in your atomic configurations with energies attached
+- Create a `TCECalculator`, which wraps the Atomic Simulation Environment (ase) package
+- Train the calculator
+- ...and deploy it! 🧪
+
 Most of these examples include external packages. If you want to set up an appropriate environment to run these 
 examples, run:
 
@@ -10,78 +19,79 @@ examples, run:
 pip install tce-lib[examples]
 ```
 
-## ⚛️ Using Atomic Simulation Environment (ASE)
+## ⚛ ASE integration
 
-Below is an example of converting an `ase.Atoms` object into a feature vector $\mathbf{t}$. The mapping is not exactly
-one-to-one, since an `ase.Atoms` object sits on a dynamic lattice rather than a static one, but we can regardless
-provide `tce-lib` sufficient information to compute $\mathbf{t}$. The code snippet below uses the version `ase==3.26.0`.
+The core object of this library is the `tce.calculator.TCECalculator` object. This object inherits from the
+`ase.Calculator` parent class from the [Atomic Simulation Environment](https://docs.ase-lib.org/) (ASE), which serves
+as a unifying framework for computing atomic properties from a large class of simulation software, including
+[LAMMPS](https://en.wikipedia.org/wiki/LAMMPS), [VASP](https://vasp.at/), [MACE](https://mace-docs.readthedocs.io/),
+and more.
+
+The `tce.calculator.TCECalculator` object can then compute feature vectors $\mathbf{t}$, consisting of $m$-body cluster
+counts:
+
+$$ N_{\alpha_1\cdots\alpha_m}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]} \prod_{n=1}^m X_{i_n \alpha_n}$$
+
+where $T_{i_1\cdots i_m}^{[\ell]}$ is the adjacency tensor for an order $m$ hyper-graph, i.e.:
+
+$$ T_{i_1\cdots i_m}^{[\ell]} = [\text{sites $i_1$, $\cdots$, $i_m$ are in a cluster $[\ell]$}] $$
+
+and $X_{i\alpha}$ denotes the occupation tensor:
+
+$$ X_{i\alpha} = [\text{site $i$ is occupied by type $\alpha$}] $$
+
+and $[\cdot]$ denotes the [Iverson bracket](https://en.wikipedia.org/wiki/Iverson_bracket).
+
+You can compute these cluster counts directly integrated within ASE:
 
 ```py
 .. include:: ../examples/using-ase.py
 ```
 
-## 💎 Exotic Lattice Structures
+This creates a calculator that will compute cluster counts for the Fe-Cr system, which is bcc, up to 2rd nearest
+neighbors, and including two types of three-body clusters, assuming a lattice parameter $a = 2.9\;\text{Å}$.
 
-Below is an example of injecting a custom lattice structure into `tce-lib`. To do this, we must extend the
-`LatticeStructure` class using `tce.constants.register_new_lattice_structure`. We use a cubic diamond structure here as
-an example, but this extends to any atomic basis in any tetragonal unit cell. Three body labels will be automatically
-computed if not specified, but this can be decently expensive, so it's recommended to compute them once and then
-specify them later.
+The grammar of the many-body features follows edge-labeling of $k$-cliques in the graph of the full solid. In plainer
+English, the `(0, 0, 1)` cluster is an isosceles triangle with two first-nearest neighbor bonds and one
+second-nearest neighbor bond.
 
-```py
-.. include:: ../examples/exotic-lattice.py
-```
+You can use the same grammar to define $k$-body clusters as well. We will see later how to visualize these clusters
+using OVITO!
 
-We are also more than happy to include new lattice types as native options in `tce-lib`! Please either open an issue
-[here](https://github.com/MUEXLY/tce-lib/issues), or a pull request [here](https://github.com/MUEXLY/tce-lib/pulls) if
-you are familiar with GitHub.
+## 🏋️‍♀️ Training + Monte Carlo
 
-If your unit cell is available via `ase`'s functionalities (below is using `ase.build.bulk`, but you can also load
-in a `.cif` file or something similar), you don't have to waste your time finding atomic bases and cutoffs every time.
-For example, for a [fluorite structure](https://en.wikipedia.org/wiki/Fluorite_structure) with U and Th cations:
+Below is a template for a standard workflow, using an Embedded Atom Method potential for the Cu-Ni alloy. This trains a
+model using the cluster counts above:
 
-```py
-.. include:: ../examples/exotic-lattice2.py
-```
+$$ \mathcal{H}_\text{eff}(\mathbf{X}) = \sum_m \frac{1}{m!}\varepsilon_{\alpha_1\cdots\alpha_m}^{[\ell]} T_{i_1\cdots i_m}^{[\ell]}\prod_{n=1}^m X_{i_n\alpha_n} $$
 
-You'll notice that a lot of the features are $0$. This is not uncommon for exotic lattice types, especially when not
-all lattice sites are equivalent. This is not a problem - we just likely need to feature reduce later using something
-like [PCA](https://en.wikipedia.org/wiki/Principal_component_analysis), which is relatively easy with an
-`sklearn.pipeline.Pipeline` object (docs are
-[here](https://scikit-learn.org/stable/modules/generated/sklearn.pipeline.Pipeline.html)). This will be elaborated
-upon in an example more focused on training ([here](https://muexly.github.io/tce-lib/tce.html#custom-training-advanced)).
+where $\varepsilon_{\alpha_1\cdots\alpha_m}^{[\ell]}$ are fitting coefficients, corresponding to the energy of each
+cluster type.
 
-## 🔩 FeCr + EAM (basic)
+The first script is training a CuNi model using an EAM potential from Fischer et al.
+(paper [here](https://doi.org/10.1016/j.actamat.2019.06.027)). In this script, we generate a bunch of random CuNi
+solid solutions, attach an `ase.calculators.eam.EAM` calculator to each configuration, compute their energies, and
+then train a `TCECalculator` instance. The calculator is then saved to be used for later.
 
-Below is a very basic example of computing a best-fit interaction vector from LAMMPS data. We use LAMMPS and an EAM
-potential from Eich et al. (paper [here](https://doi.org/10.1016/j.commatsci.2015.03.047), NIST interatomic potential 
-repository entry [here](https://www.ctcms.nist.gov/potentials/entry/2015--Eich-S-M-Beinke-D-Schmitz-G--Fe-Cr/)), 
-use `tce-lib` to build a best-fit interaction vector from a sequence of random samples, and cross-validate the results 
-using `scikit-learn`.
-
-```py
-.. include:: ../examples/iron-chrome-lammps.py
-```
-
-Above, we avoided a lot of convenience functions, like constructing a feature vector calculator from a feature vector
-computer factory in the prior examples. You can very easily still use these factories, but the above example shows that
-you should not feel obligated to use them for more advanced use cases.
-
-This generates the plot below:
+We can do a very standard benchmark, which is a parity plot of the test set and the training set:
 
 [<img
-    src="https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/examples/cross-val.png"
+    src="https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/examples/parity-plot.png"
     width=100%
-    alt="Residual errors during cross-validation"
-    title="Residual errors"
-/>](https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/examples/cross-val.png)
+    alt="CuNi SRO parameter from CE"
+    title="SRO parameter"
+/>](https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/examples/parity-plot.png)
 
-The errors are not great here (a good absolute error is on the order of 1-10 meV/atom as a rule of thumb). The fit
-would be much better if we included partially ordered samples as well. We emphasize that this is a very basic example,
-and that a real production fit should be done against a more diverse training set than just purely random samples.
+**IMPORTANT**: These are unrelaxed energies! A real production environment should optimize the structure - see the
+prior example on how to do this within a LAMMPS calculator.
 
-This example serves as a good template for using programs other than LAMMPS to compute energies. For example, one could
-define a constructor that creates a `Calculator` instance that wraps VASP:
+```py
+.. include:: ../examples/0-copper-nickel-training.py
+```
+
+For the sake of simplicity, we stuck with ase's EAM implementation, which is implemented in pure Python. This example
+serves as a good template for using other methods to compute energies. For example, one could define a a `Calculator`
+instance that wraps VASP:
 
 ```py
 from ase.calculators.vasp import Vasp
@@ -109,29 +119,11 @@ calculator_constructor = lambda: Vasp(
 
 See ASE's documentation [here](https://ase-lib.org/ase/calculators/vasp.html) for how to properly set this up!
 
-## 🏋️‍♀️ Training + Monte Carlo
+This pattern also works for more complex lattice structures - simply provide the neighbor cutoffs, and you're good to
+go!
 
-Below is a slightly more involved example of creating a model and deploying it for a Monte Carlo run.
-
-This showcases two utility modules, namely `tce.training` and `tce.monte_carlo`. These mostly contain wrappers, so
-feel free to avoid them! If you are using this for a novel research idea, it is likely that these wrappers are too
-basic (which is a good thing for you!).
-
-The first script is training a CuNi model using an EAM potential from Fischer et al.
-(paper [here](https://doi.org/10.1016/j.actamat.2019.06.027)). In this script, we generate a bunch of random CuNi
-solid solutions, attach an `ase.calculators.eam.EAM` calculator to each configuration, compute their energies, and
-then train using the `tce.training.train` method, which returns a `tce.training.ClusterExpansion` instance. The
-container is then saved to be used for later.
-
-**IMPORTANT**: These are unrelaxed energies! A real production environment should optimize the structure - see the
-prior example on how to do this within a LAMMPS calculator.
-
-```py
-.. include:: ../examples/0-copper-nickel-training.py
-```
-
-The next script uses the saved container to run a canonical Monte Carlo simulation on a $10\times 10\times 10$
-supercell, storing the configuration (saved in an `ase.Atoms` object) every 100 frames. We also set up a `logging`
+The next script uses the saved calculator to run a canonical Monte Carlo simulation on a $15\times 15\times 15$
+supercell, storing the configuration (saved in an `ase.Atoms` object) every 1000 frames. We also set up a `logging`
 configuration here, which will tell you how far-along the simulation is. Note that `trajectory` looks complicated, but
 is just a list of `ase.Atoms` objects, so you have a lot of freedom to do what you wish with this trajectory later.
 
@@ -166,7 +158,7 @@ we'll compute the Cowley short range order parameter using the
 ```
 
 This generates the plot below. A negative value indicates attraction between two atom types. So, the solution is
-clearly not fully random! We probably need a lot more than 10,000 steps too - this curve should bottom out once we
+clearly not fully random! We might need a more than 100,000 steps too - this curve should bottom out once we
 reach steady state. Note we can also just grab the potential energy from the `ase.Atoms` instances - the Monte Carlo
 run stores this information using `ase.calculators.singlepoint.SinglePointCalculator` instances.
 
@@ -236,7 +228,8 @@ model here (without an intercept...), see `scikit-learn`'s docs
 
 This script (it will be quite slow...) will calculate the number of nonzero cluster interaction coefficients as a
 function of the regularization parameter. For larger regularization parameters, the number of nonzero coefficients
-should decrease.
+should decrease. This is a useful technique if you explicitly want to exclude clusters that are relatively unimportant,
+but are not sure which clusters should be included.
 
 [<img
     src="https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/examples/regularization.png"
@@ -246,17 +239,18 @@ should decrease.
 />](https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/examples/regularization.png)
 
 
-## 🧲 Learning a tensorial property
+## 🧲 Learning tensorial vs. scalar property
 
 In general, one might also want to learn tensorial properties. This can be done by vectorizing the property in some
 way, like [Voigt notation](https://en.wikipedia.org/wiki/Voigt_notation):
 
 $$ \sigma = (\sigma_{xx}, \sigma_{yy}, \sigma_{zz}, \sigma_{yz}, \sigma_{xz}, \sigma_{xy}) $$
 
-Below is an example of changing the target property to stress rather than energy. It also showcases an important point
+Below is an example of adding a new target property, namely stress. It also showcases an important point
 about `tce-lib`: our feature vectors are **extensive**, not intensive like other CE libraries. This matters when
 training on intensive properties, like stress. Here, we can inject custom behavior, i.e. train on intensive features.
-Of course, it is also fine to use this same pattern to train a CE model on other scalar properties.
+Of course, it is also fine to use this same pattern to train a CE model on other scalar properties. Using this new
+target property, we can predict things like enthalpy.
 
 ```py
 .. include:: ../examples/4-tensorial-property.py
@@ -328,28 +322,25 @@ which tells you some info, and (should) additionally give you contact informatio
 that `tce.datasets.Dataset.configurations` is of type `list[ase.Atoms]`, so you can directly plug this into a training
 routine. Please contact me directly (email above) if you have datasets you would like to be added 😊
 
-## 🎁 ASE Calculator Wrapper
+## 💎 Exotic lattice structures
 
-We have also provided an `ase.calculator.Calculator` child class that wraps `tce-lib`. This is mostly a convenience
-feature for those that already have an `ase.calculator.Calculator`-driven workflow.
+ASE has quite a large suite for initializing different lattice structures. Here, the pattern does not change: simply
+provide your `ase.Atoms` instance and neighbor cutoffs, as well as any many-body terms you're interested in. See an
+example below for an Si-Ge alloy within a cubic diamond structure:
 
 ```py
-.. include:: ../examples/calculator-interface.py
+.. include:: ../examples/exotic-lattice.py
 ```
 
-One note here is that this is a great way to wrap multiple cluster expansions for different properties into one object.
-There's no guarantee that any property will be well-predicted, though. For example, the off-diagonal stress
-$\sigma_{xy}$ above: the predictive strength is very weak because the property is largely $0$ across the whole
-training set. In a real workflow, though, this will likely not be a problem, since the stresses are very
-concentrated along the diagonal elements. Also, again, the default behavior of `tce-lib` is to assume that the target
-property is **extensive**, so make sure that each training routine is computing the correct feature vectors!
+or for a fluorite structure with multiple sublattices:
 
-[<img
-    src="https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/examples/calculator-interface.png"
-    width=100%
-    alt="Multi-property cluster expansion in an ASE calculator"
-    title="Calculator interface"
-/>](https://raw.githubusercontent.com/MUEXLY/tce-lib/refs/heads/main/examples/calculator-interface.png)
+```py
+.. include:: ../examples/exotic-lattice2.py
+```
+
+You'll notice that a lot of the features are $0$. This is not uncommon for exotic lattice types, especially when not
+all lattice sites are equivalent. This is not a problem - we just likely need to feature reduce later using something
+like PCA, which is relatively easy with an sklearn.pipeline.Pipeline object.
 
 # Sharp Edges
 
@@ -446,74 +437,16 @@ Then, the resulting energy difference will be computed as:
 
 $$ f(\Delta\mathbf{t}) = \alpha + \boldsymbol{\beta}^\intercal\Delta\mathbf{t} $$
 
-which is invalid unless $\alpha = 0$. `tce.monte_carlo.monte_carlo` will warn the user if they input a `model` argument that has 
-a nonzero `.intercept_` attribute like `sklearn` models do.
+which is invalid unless $\alpha = 0$. To address this, the Monte Carlo function will remove this intercept by probing
+basis vectors, i.e. by evaluating the intercept and subtracting out that intercept:
 
-For simple models, e.g. if you train using `sklearn.linear_model.LinearRegression`, you  can simply ignore the intercept term 
-during training:
+$$ f_{\text{new}}(\Delta\mathbf{t}) = f(\Delta\mathbf{t}) - f(\mathbf{I}) $$
 
-```py
-from tce.training import train
-from sklearn.linear_model import LinearRegression
-
-ce = train(
-    configurations=...
-    basis=...
-    model=LinearRegression(fit_intercept=False)    
-)
-```
-
-However, it is often the case that results are extremely sensitive on the individual interaction energies. In this case, ones first 
-instinct is to use PCA to reduce the feature space dimensionality, and to scale the features to have zero mean and unit variance:
-
-```py
-from tce.training import train
-from sklearn.linear_model import LinearRegression
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-
-ce = train(
-    configurations=...
-    basis=...
-    model=Pipeline([
-        ("scale", StandardScaler()),
-        ("reduce", PCA(n_components=...)),
-        ("fit", LinearRegression(fit_intercept=False))
-    ]) 
-)
-```
-
-However, this routine is almost certain to produce garbage results, and for a very subtle reason. Both `StandardScaler` and `PCA` 
-recenter the data to have zero mean, which introduces an intercept. This can be changed within `StandardScaler`, but not `PCA`. 
-We need to make sure that the data is not recentered, and that we replace `PCA` with a decomposition method that also does 
-not recenter the data, such as `TruncatedSVD`:
-
-```py
-from tce.training import train
-from sklearn.linear_model import LinearRegression
-from sklearn.decomposition import TruncatedSVD
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-
-ce = train(
-    configurations=...
-    basis=...
-    model=Pipeline([
-        ("scale", StandardScaler(with_mean=False)),
-        ("reduce", TruncatedSVD(n_components=...)),
-        ("fit", LinearRegression(fit_intercept=False))
-    ]) 
-)
-```
-
-Of course, you can replace `sklearn.linear_model.LinearRegression` with something more robust, e.g. 
-`sklearn.linear_model.ElasticNetCV`, which uses [elastic net regularization](https://en.wikipedia.org/wiki/Elastic_net_regularization) 
-and [leave-one-out cross validation](https://www.statology.org/leave-one-out-cross-validation/).
+where $\mathbf{I}$ is the identity matrix.
 
 """
 
-__version__ = "0.11.1"
+__version__ = "1.0.0"
 __authors__ = ["Jacob Jeffries"]
 
 __url__ = "https://github.com/MUEXLY/tce-lib"

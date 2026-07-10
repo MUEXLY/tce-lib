@@ -2,19 +2,18 @@ from ase import build
 import numpy as np
 
 from tce.calculator import TCECalculator
-from tce.constants import LatticeStructure, STRUCTURE_TO_CUTOFF_LISTS
+from tce.constants import CUTOFFS
 
 
 def main():
 
     # define the lattice and species
-    structure = LatticeStructure.BCC
     lattice_parameter = 2.9
     size = (5, 5, 5)
     species = ["Fe", "Cr"]
 
     rng = np.random.default_rng(seed=0)
-    cutoffs = lattice_parameter * STRUCTURE_TO_CUTOFF_LISTS[structure][:2]
+    cutoffs = lattice_parameter * CUTOFFS["bcc"][:2]
 
     calculator = TCECalculator(
         neighbor_cutoffs=cutoffs,
@@ -24,7 +23,7 @@ def main():
 
     ase_supercell = build.bulk(
         species[0],
-        crystalstructure=structure.name.lower(),
+        crystalstructure="bcc",
         a=lattice_parameter,
         cubic=True
     ).repeat(size)

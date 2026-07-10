@@ -80,7 +80,7 @@ def main():
     plt.grid()
     gca = plt.gca()
     plt.plot(gca.get_xlim(), gca.get_xlim(), ls="--", color="black")
-    plt.savefig("out.png")
+    plt.savefig("parity-plot.png", dpi=800, bbox_inches="tight")
 
     with open("copper_nickel_tce.pkl", "wb") as file:
         pickle.dump(calc, file)

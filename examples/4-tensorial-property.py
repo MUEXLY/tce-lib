@@ -1,11 +1,8 @@
-from ase import build, Atoms
+from ase import build
 from ase.calculators.eam import EAM
 import numpy as np
-from numpy.typing import NDArray
 
-from tce.constants import LatticeStructure, ClusterBasis
-from tce.training import train, get_type_map, LimitingRidge
-from tce.topology import topological_feature_vector_factory
+from tce.training import LimitingRidge
 from tce.calculator import TCECalculator
 
 

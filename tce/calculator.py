@@ -22,7 +22,6 @@ from numpy.typing import NDArray
 import sparse
 from scipy.spatial import KDTree
 from opt_einsum import contract
-from greek_alphabet import Alphabet
 from multiset import Multiset
 
 from .training import Model, LimitingRidge
@@ -31,7 +30,7 @@ from .topology import get_adjacency_tensors
 
 
 LOGGER = logging.getLogger(__name__)
-GREEK_ALPHABET = ''.join(char.lower for char in Alphabet.get_list())
+GREEK_ALPHABET = "αβγδεζηθικλμνξοπρστυφχψω"
 
 
 @dataclass
@@ -91,7 +90,12 @@ class TCECalculator(Calculator):
         for body_order in self.feature_groups.keys():
             latin_indices = ascii_lowercase[:body_order]
             greek_indices = GREEK_ALPHABET[:body_order]
-            input_str = f"L{latin_indices},{','.join(f'{l}{g}' for l, g in zip(latin_indices, greek_indices))}"
+
+            # build mixed indices i\alpha,j\beta,k\gamma,etc
+            mixed_indices = ','.join(
+                f'{latin}{greek}' for latin, greek in zip(latin_indices, greek_indices)
+            )
+            input_str = f"L{latin_indices},{mixed_indices}"
             output_str = f"L{greek_indices}"
             self.einsum_strs[body_order] = f"{input_str}->{output_str}"
 
@@ -196,7 +200,7 @@ class TCECalculator(Calculator):
                     n_body_tensor = sum(
                         contract(
                             einsum_str,
-                            *(adjacency_tensors[l] for l in permuted_label)
+                            *(adjacency_tensors[letter] for letter in permuted_label)
                         ) for permuted_label in set(permutations(label))
                     )
 

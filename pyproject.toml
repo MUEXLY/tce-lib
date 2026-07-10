@@ -36,7 +36,6 @@ dependencies = [
     "opt-einsum>=3.0.1, <4.0",
     "ase>=3.10.0, <3.26.0",
     "aenum>=3.0.0, <3.1.17",
-    "greek_alphabet==1.0",
     "multiset==3.2.0"
 ]
 

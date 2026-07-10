@@ -27,9 +27,9 @@ def main():
     trajectory = monte_carlo_new(
         initial_configuration=atoms,
         tce_calculator=calculator,
-        num_steps=100_000,
+        num_steps=10_000,
         beta=19.341,
-        save_every=1_000
+        save_every=100
     )
 
     for i, frame in enumerate(trajectory):

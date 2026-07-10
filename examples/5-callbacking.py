@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import pickle
 
 import numpy as np
 import requests
@@ -10,10 +11,10 @@ from tce.monte_carlo import monte_carlo_new
 
 
 def discord_webhook_callback(
-        step: int,
-        num_steps: int,
-        env_var: str = "DISCORD_WEBHOOK_URL",
-        message: str = "CuNi mc run finished"
+    step: int,
+    num_steps: int,
+    env_var: str = "DISCORD_WEBHOOK_URL",
+    message: str = "CuNi mc run finished"
 ):
 
     if not os.getenv(env_var) or step + 1 < num_steps:

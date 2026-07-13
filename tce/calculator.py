@@ -8,7 +8,6 @@ from typing import Optional, Union
 from itertools import permutations, combinations, repeat, product
 import logging
 from collections import defaultdict
-from string import ascii_lowercase
 from math import isqrt
 import warnings
 from pathlib import Path
@@ -31,6 +30,7 @@ from .topology import get_adjacency_tensors
 
 LOGGER = logging.getLogger(__name__)
 GREEK_ALPHABET = "αβγδεζηθικλμνξοπρστυφχψω"
+LATIN_ALPHABET = "ijklmnopqrstuvwxyz"
 
 
 @dataclass
@@ -257,7 +257,7 @@ class TCECalculator(Calculator):
 
         # Pre-compute einsum strings for each body order
         for body_order in self.feature_groups.keys():
-            latin_indices = ascii_lowercase[:body_order]
+            latin_indices = LATIN_ALPHABET[:body_order]
             greek_indices = GREEK_ALPHABET[:body_order]
 
             # build mixed indices i\alpha,j\beta,k\gamma,etc
@@ -358,7 +358,7 @@ class TCECalculator(Calculator):
 
             for body_order, features in self.feature_groups.items():
                 
-                final_result_str = ascii_lowercase[:body_order]
+                final_result_str = LATIN_ALPHABET[:body_order]
                 input_str = ','.join(
                     f"{i1}{i2}" for i1, i2 in combinations(final_result_str, r=2)
                 )
@@ -651,6 +651,9 @@ class TCECalculator(Calculator):
     ):
 
         Calculator.calculate(self, atoms, properties, all_changes)
+
+        if atoms is None:
+            raise ValueError
 
         for name in properties:
 

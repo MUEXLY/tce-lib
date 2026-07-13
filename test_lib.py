@@ -21,7 +21,7 @@ from tce.training import LimitingRidge
 from tce.topology import symmetrize
 from tce.datasets import PresetDataset, Dataset
 from tce.calculator import TCECalculator
-from tce.monte_carlo import monte_carlo_new, transform_model
+from tce.monte_carlo import monte_carlo, transform_model
 from tce.constants import CUTOFFS
 
 
@@ -259,7 +259,6 @@ def test_can_train_and_attach_calculator(preset_dataset):
         ])
     )
 
-    lattice_parameter = dataset.lattice_parameter
     structure = dataset.lattice_structure
     cutoffs = CUTOFFS[structure][:3]
 
@@ -282,7 +281,6 @@ def test_can_difference_train(preset_dataset):
     dataset = Dataset.from_preset(preset_dataset)
     configurations = dataset.configurations[:10]
 
-    lattice_parameter = dataset.lattice_parameter
     structure = dataset.lattice_structure
     cutoffs = CUTOFFS[structure][:3]
     species = np.unique(
@@ -352,7 +350,7 @@ def test_floating_point_corrected():
         }
     )
 
-    _ = monte_carlo_new(
+    _ = monte_carlo(
         initial_configuration=solution,
         tce_calculator=calc,
         num_steps=1_000,
@@ -389,7 +387,7 @@ def test_sklearn_model_in_mc():
         models={"energy": RidgeCV(fit_intercept=False)}
     ).train(solutions)
 
-    _ = monte_carlo_new(
+    _ = monte_carlo(
         initial_configuration=solutions[0],
         tce_calculator=calc,
         num_steps=10,
@@ -426,7 +424,7 @@ def test_sklearn_model_with_intercept_warns_in_mc():
     ).train(solutions)
 
     with pytest.warns(UserWarning):
-        _ = monte_carlo_new(
+        _ = monte_carlo(
             initial_configuration=solutions[0],
             tce_calculator=calc,
             num_steps=10,
@@ -468,7 +466,7 @@ def test_sklearn_pipeline_in_mc():
     ).train(solutions)
 
     with pytest.warns(UserWarning):
-        _ = monte_carlo_new(
+        _ = monte_carlo(
             initial_configuration=solutions[0],
             tce_calculator=calc,
             num_steps=10,
@@ -508,9 +506,9 @@ def test_annealing_mc(beta):
     
     if isinstance(beta, list):
         if len(beta) == 2:
-            # invalid length, should raise error
+            # invalid length. should raise error
             with pytest.raises(AssertionError):
-                _ = monte_carlo_new(
+                _ = monte_carlo(
                     initial_configuration=solutions[0],
                     tce_calculator=calc,
                     num_steps=10,
@@ -519,7 +517,7 @@ def test_annealing_mc(beta):
             return
 
     # for now, only tests that no error is raised. TODO: check that correct betas are used
-    _ = monte_carlo_new(
+    _ = monte_carlo(
         initial_configuration=solutions[0],
         tce_calculator=calc,
         num_steps=10,
@@ -554,7 +552,7 @@ def test_energy_diff_transform(model):
     fe_cohesive_energy = 4.0
     cr_cohesive_energy = 3.0
 
-    # just fit some dummy CE using pure Fe, pure Cr, and a 50/50
+    # fit some dummy CE using pure Fe, pure Cr, and a 50/50
     pure_fe = build.bulk("Fe", crystalstructure="bcc", a=3.0, cubic=True).repeat((5, 5, 5))
     pure_fe.calc = SinglePointCalculator(pure_fe, energy=len(pure_fe) * -fe_cohesive_energy)
     pure_cr = build.bulk("Cr", crystalstructure="bcc", a=3.0, cubic=True).repeat((5, 5, 5))

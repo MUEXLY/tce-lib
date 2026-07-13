@@ -140,7 +140,7 @@ def transform_model(model: Model) -> Model:
     raise NotImplementedError
 
 
-def monte_carlo_new(
+def monte_carlo(
     initial_configuration: Atoms,
     tce_calculator: TCECalculator,
     num_steps: int,

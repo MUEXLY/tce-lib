@@ -1,7 +1,5 @@
 r"""
-This module defines some useful constants, notably lattice structures (and their corresponding cutoffs, atomic bases,
-etc.). These constants define how to compute feature vectors for a solid, since topology is a function of lattice
-structure.
+This module defines useful cutoffs for convenience.
 """
 
 from typing import Literal

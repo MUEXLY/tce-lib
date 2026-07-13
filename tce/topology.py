@@ -1,6 +1,5 @@
 r"""
-This module tells `tce-lib` how to compute topological tensors and their corresponding features, including how to
-compute local feature differences for efficient Monte Carlo runs.
+This module tells `tce-lib` how to compute adjacency tensors and has various other utilities.
 """
 
 from itertools import permutations

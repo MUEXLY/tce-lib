@@ -6,7 +6,6 @@ model.
 
 from typing import Optional, Callable, TypeAlias, Sequence
 import logging
-from functools import wraps
 import warnings
 
 import numpy as np
@@ -20,65 +19,10 @@ from tce.calculator import TCECalculator
 LOGGER = logging.getLogger(__name__)
 """@private"""
 
-MCStep: TypeAlias = Callable[[NDArray[np.floating]], NDArray[np.floating]]
+MCStep: TypeAlias = Callable[[Atoms], Atoms]
 r"""
 Type alias defining what a step in a monte carlo simulation looks like. In general, a step should look like a function 
-that takes in a state matrix $\mathbf{X}$, and returns a new one.
-"""
-
-
-def two_particle_swap_factory(generator: np.random.Generator) -> MCStep:
-
-    r"""
-    Factory to create a sensible MC step, which is to swap two particles.
-
-    Args:
-        generator (np.random.Generator): Random number generator to be used to sample a new MC step
-    """
-
-    @wraps(two_particle_swap_factory)
-    def wrapper(state_matrix: NDArray) -> NDArray[np.floating]:
-
-        new_state_matrix = state_matrix.copy()
-        i, j = generator.integers(len(state_matrix), size=2)
-        new_state_matrix[i], new_state_matrix[j] = state_matrix[j], state_matrix[i]
-        return new_state_matrix
-
-    return wrapper
-
-
-EnergyModifier: TypeAlias = Callable[[NDArray[np.floating], NDArray[np.floating]], float]
-r"""
-Type alias defining what an energy modifier should look like. In general, a modifier should look like a function that 
-takes in two state matrices $\mathbf{X}$ and $\mathbf{X}'$ and returns the term to be added to the energy difference 
-$\Delta E$. For example, if you want to simulate a grand canonical ensemble, the Metropolis acceptance criterion is:
-
-$$ \exp\left(-\beta\left(\Delta E - \sum_\alpha \mu_\alpha \Delta N_\alpha\right)\right) = \exp\left(-\beta\left(\Delta E - \boldsymbol{\mu}\cdot\Delta\mathbf{N}\right)\right) > u $$
-
-for a random number $u$ from $\text{Uniform}(0, 1)$. You can implement this strategy by defining an energy modifier:
-
-```py
-from typing import Callable
-from functools import wraps
-
-import numpy as np
-
-def energy_modifier_factory(
-    chemical_potentials: NDArray[np.floating]
-) -> Callable[[NDArray[np.floating], NDArray[np.floating]], float]:
-
-    @wraps(energy_modifier_factory)
-    def wrapper(
-        state_matrix: NDArray[np.floating],
-        new_state_matrix: NDArray[np.floating]
-    ) -> float:
-        change_in_num_types = new_state_matrix.sum(axis=0) - state_matrix.sum(axis=0)
-        return -chemical_potentials @ change_in_num_types
-
-    return wrapper
-```
-
-You can see a concrete example of the above energy modifier [here](https://github.com/MUEXLY/tce-lib#training-monte-carlo).
+that takes in a state $\mathbf{X}$, and returns a new one.
 """
 
 
@@ -196,18 +140,6 @@ def transform_model(model: Model) -> Model:
     raise NotImplementedError
 
 
-def null_energy_modifier(
-    state_matrix: NDArray[np.floating],
-    new_state_matrix: NDArray[np.floating]
-) -> float:
-
-    r"""
-    Default energy modifier, which does nothing to the total energy
-    """
-
-    return 0.0
-
-
 def monte_carlo_new(
     initial_configuration: Atoms,
     tce_calculator: TCECalculator,
@@ -223,6 +155,42 @@ def monte_carlo_new(
     r"""
     New Monte Carlo simulation function that uses the `transform_model` function to transform the model to predict
     from $\Delta$'s. This is a more robust implementation that should work for most models, including pipelines.
+
+    Args:
+        initial_configuration (Atoms):
+            Initial configuration to start the MC run on. In most cases, it's wise to start from a fully random solution
+        tce_calculator (TCECalculator):
+            TCE calculator to calculate both feature vector differences and energy differences. This should be a trained instance, 
+            trained with either `tce.calculator.TCECalculator.train` or `tce.calculator.TCECalculator.difference_train`.
+        num_steps (int):
+            Number of MC steps to perform.
+        beta (float | Sequence[float] | NDArray[np.floating]):
+            Thermodynamic beta to run the MC simulation at, defined by $\beta = 1 / (kT)$, where $k$ is the 
+            [Boltzmann constant](https://en.wikipedia.org/wiki/Boltzmann_constant) and $T$ is absolute temperature. If specified as 
+            a float, then each MC step will use this value of `beta`. If specified as a sequence, then each step will have its own 
+            `beta`, which is useful for [simulated annealing](https://en.wikipedia.org/wiki/Simulated_annealing)
+        save_every (int):
+            After how many steps to save each configuration. This defaults to `1`, but this default value is often too small. 
+            It is wise to pick a value such that `num_steps // save_every` is around `1000`, i.e. you only save `1000` frames of the 
+            simulation.
+        generator (np.random.Generator):
+            Generator to compute the necessary random numbers. If not specified, defaults to `np.random.default_rng(seed=0)`.
+        mc_step (Callable[[Atoms], Atoms]):
+            MC step to attempt. If not specified, the function will assume the user wants to perform standard canonical MC, 
+            and will attempt a two-particle swap at each step, i.e.:
+
+            ```py
+            def mc_step(atoms: Atoms) -> Atoms:
+                new_atoms = atoms.copy()
+                i, j = generator.integers(len(atoms), size=2)
+                new_atoms[i].symbol, new_atoms[j].symbol = new_atoms[j].symbol, new_atoms[i].symbol
+                return new_atoms
+            ```
+        energy_modifier (Callable[[Atoms, Atoms], float]):
+            Modifier to add to energies. If not specified, the function will assume the user wants to perform standard canonical 
+            MC, and will simply use the energy as the thermodynamic potential. See the grand canonical MC example 
+            [here](https://github.com/MUEXLY/tce-lib/blob/main/examples/1-copper-nickel-mc2.py) for how to use this 
+            argument to change the ensemble sampled.
     """
 
     if not generator:

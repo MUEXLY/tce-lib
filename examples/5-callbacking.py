@@ -1,4 +1,3 @@
-from pathlib import Path
 import os
 import pickle
 
@@ -6,8 +5,7 @@ import numpy as np
 import requests
 from ase import build
 
-from tce.calculator import TCECalculator
-from tce.monte_carlo import monte_carlo_new
+from tce.monte_carlo import monte_carlo
 
 
 def discord_webhook_callback(
@@ -39,7 +37,7 @@ def main():
     ).repeat((10, 10, 10))
     atoms.symbols = rng.choice(["Cu", "Ni"], size=len(atoms))
 
-    trajectory = monte_carlo_new(
+    trajectory = monte_carlo(
         initial_configuration=atoms,
         tce_calculator=calc,
         num_steps=10_000,

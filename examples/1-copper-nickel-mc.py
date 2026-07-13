@@ -6,7 +6,7 @@ import pickle
 import numpy as np
 from ase import io, build
 
-from tce.monte_carlo import monte_carlo_new
+from tce.monte_carlo import monte_carlo
 
 
 def main():
@@ -24,7 +24,7 @@ def main():
     ).repeat((15, 15, 15))
     atoms.symbols = rng.choice(["Cu", "Ni"], size=len(atoms))
 
-    trajectory = monte_carlo_new(
+    trajectory = monte_carlo(
         initial_configuration=atoms,
         tce_calculator=calculator,
         num_steps=10_000,

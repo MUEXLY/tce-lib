@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 import matplotlib.pyplot as plt
 from ase import build, Atoms
 
-from tce.monte_carlo import monte_carlo_new, MCStep
+from tce.monte_carlo import monte_carlo, MCStep
 
 
 def one_particle_swap_factory(
@@ -72,7 +72,7 @@ def main():
 
     for i, chemical_potential_cu in enumerate(chemical_potentials_cu):
 
-        trajectory = monte_carlo_new(
+        trajectory = monte_carlo(
             initial_configuration=pure_ni,
             tce_calculator=calculator,
             num_steps=10_000,

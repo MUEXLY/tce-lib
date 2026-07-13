@@ -197,9 +197,9 @@ Note that the curve is continuous, which denotes no phase transitions at the tem
 phase diagrams - CuNi forms a solid solution along the whole composition range below the melting point.
 
 <div style="text-align: center;">
-  <a href="https://sv.rkriz.net/classes/MSE2094_NoteBook/96ClassProj/OLD/examples/cu_ni.jpg">
+  <a href="https://www.doitpoms.ac.uk/miclib/phase_diagrams/imagesPD/CuNi2.png">
     <img
-      src="https://sv.rkriz.net/classes/MSE2094_NoteBook/96ClassProj/OLD/examples/cu_ni.jpg"
+      src="https://www.doitpoms.ac.uk/miclib/phase_diagrams/imagesPD/CuNi2.png"
       width="50%"
       alt="CuNi phase diagram"
       title="CuNi"
@@ -207,7 +207,7 @@ phase diagrams - CuNi forms a solid solution along the whole composition range b
   </a>
 </div>
 
-Image credit: Ron Kriz, MSE 2094 @ Virginia Tech ([url](https://sv.rkriz.net/classes/MSE2094_NoteBook/96ClassProj/OLD/examples/cu-ni.html))
+Image credit: DoITPoMS @ University of Cambridge ([url](https://www.doitpoms.ac.uk/miclib/phase_diagrams.php?id=11))
 
 ## 💻 Custom Training (Advanced)
 

@@ -14,7 +14,7 @@ import warnings
 from pathlib import Path
 import pickle
 
-from ase.calculators.calculator import Calculator
+from ase.calculators.calculator import Calculator, all_changes, PropertyNotImplementedError
 from ase import Atoms
 from ase.data import atomic_numbers
 import numpy as np
@@ -218,6 +218,8 @@ class TCECalculator(Calculator):
 
     def __post_init__(self):
 
+        Calculator.__init__(self)
+
         if not self.intensive:
             self.intensive = {"energy": False}
 
@@ -275,6 +277,9 @@ class TCECalculator(Calculator):
             if body_order >= 3:
                 num_features = len(self.feature_groups[body_order])
                 self.feature_vector_size += num_features * (num_species ** body_order)
+
+        self.implemented_properties = list(self.models.keys())
+    
 
     def get_feature_label_order(self) -> list[tuple[tuple[int, ...], tuple[str, ...]]]:
 
@@ -638,25 +643,29 @@ class TCECalculator(Calculator):
 
         raise NotImplementedError
 
-
-    def get_property(
+    def calculate(
         self,
-        name: str, 
-        atoms: Optional[Atoms] = None, 
-        allow_calculation: bool = True
+        atoms: Optional[Atoms] = None,
+        properties=['energy'],
+        system_changes=all_changes
     ):
 
-        if atoms is None:
-            raise ValueError("Please provide an Atoms object")
+        Calculator.calculate(self, atoms, properties, all_changes)
 
-        feature_vec = self.get_feature_vector(atoms)
-        if self.intensive[name]:
-            feature_vec /= len(atoms)
+        for name in properties:
 
-        prop = self.models[name].predict(feature_vec.reshape(1, -1))
-        if isinstance(prop, np.ndarray):
-            prop = prop.squeeze()
-        return prop
+            if name not in self.implemented_properties:
+                raise PropertyNotImplementedError(f"property {name} not included in models")
+
+            feature_vec = self.get_feature_vector(atoms)
+            if self.intensive[name]:
+                feature_vec /= len(atoms)
+
+            prop = self.models[name].predict(feature_vec.reshape(1, -1))
+            if isinstance(prop, np.ndarray):
+                prop = prop.squeeze()
+            
+            self.results[name] = prop
 
 
     def train(self, configurations: list[Atoms]):

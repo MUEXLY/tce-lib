@@ -153,6 +153,28 @@ def test_no_energy_computation_raises_attribute_error():
         calc.train(configurations)
 
 
+def test_ase_calculator_api_initializes_state():
+
+    class DummyModel:
+        def predict(self, X):
+            return np.zeros(X.shape[0])
+
+    atoms = build.bulk("Fe", crystalstructure="bcc", a=2.7, cubic=True).repeat((2, 2, 2))
+
+    calc = TCECalculator(
+        models={"energy": DummyModel()},
+        neighbor_cutoffs=[0.5 * np.sqrt(3.0) * 2.7],
+        many_body_features=[],
+        species=["Fe"]
+    )
+
+    energy = calc.get_potential_energy(atoms)
+
+    assert energy == 0.0
+    assert calc.atoms is not None
+    assert calc.results["energy"] == 0.0
+
+
 @pytest.mark.parametrize("preset_dataset", PresetDataset)
 def test_can_load_and_compute_energies_from_dataset(preset_dataset):
 

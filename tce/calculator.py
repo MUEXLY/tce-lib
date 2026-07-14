@@ -4,113 +4,797 @@ this module provides an `ase.calculator.Calculator` class that wraps `tce-lib`
 
 
 from dataclasses import dataclass, field
-from typing import Optional
-from itertools import pairwise
-from enum import Enum, auto
+from typing import Optional, Union
+from itertools import permutations, combinations, repeat, product
 import logging
+from collections import defaultdict
+from math import isqrt
+import warnings
+from pathlib import Path
+import pickle
 
-from ase.calculators.calculator import Calculator
+from ase.calculators.calculator import Calculator, all_changes, PropertyNotImplementedError
 from ase import Atoms
+from ase.data import atomic_numbers
 import numpy as np
 from numpy.typing import NDArray
+import sparse
+from scipy.spatial import KDTree
+from opt_einsum import contract
+from multiset import Multiset
 
-from .training import ClusterExpansion
-from .topology import FeatureComputer, topological_feature_vector_factory
+from .training import Model, LimitingRidge
+from .topology import hash_topology, symmetrize
+from .topology import get_adjacency_tensors
 
 
 LOGGER = logging.getLogger(__name__)
-
-
-class ASEProperty(Enum):
-
-    r"""
-    supported ASE properties to compute
-    """
-
-    ENERGY = auto()
-    STRESS = auto()
-
-
-STR_TO_PROPERTY: dict[str, ASEProperty] = {
-    "energy": ASEProperty.ENERGY,
-    "stress": ASEProperty.STRESS
-}
-r"""mapping from ase's string to our Enum class for properties"""
-
-INTENSIVE_PROPERTIES: set[ASEProperty] = {
-    ASEProperty.STRESS
-}
-r"""set of intensive properties"""
+GREEK_ALPHABET = "αβγδεζηθικλμνξοπρστυφχψω"
+LATIN_ALPHABET = "ijklmnopqrstuvwxyz"
 
 
 @dataclass
 class TCECalculator(Calculator):
 
-    """
-    ASE calculator wrapper for `tce-lib`.
+    r"""
+    Calculator object to perform cluster count calculations.
+
+    Example usage:
+
+    ```py
+    from ase import Atoms
+    import numpy as np
+    from tce.calculator import TCECalculator
+    from tce.constants import CUTOFFS
+
+    # fcc Ag-Al with lattice parameter 3.0
+    # we want to include up to 3 nearest neighbors, and the 1nn equilateral triangle
+
+    a = 3.0
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:3] * a,
+        many_body_features=[(0, 0, 0)],
+        species=["Ag", "Al"]
+    )
+
+    # cluster counts
+    atoms: Atoms = ...
+    feature_vector = calc.get_feature_vector(atoms)
+    ```
     """
 
-    cluster_expansions: dict[ASEProperty, ClusterExpansion]
-    feature_computers: dict[ASEProperty, FeatureComputer] = field(init=False)
+    neighbor_cutoffs: NDArray[np.floating]
+    r"""
+    Array of neighbor cutoffs.
+    For sc, bcc, or fcc solids, you can use `tce.constants.CUTOFFS`. 
+    For other structures, you'll need to supply your own cutoff radii.
+    """
+
+    many_body_features: list[tuple[int, ...]]
+    r"""
+    Many-body features to include in the feature vector calculation.
+
+    Each tuple entry in this attribute should correspond to edge labels on a subgraph. 
+    I.e., every bond within the cluster should be enumerated.
+
+    For example, if you want to include two many-body features:
+
+    - Equilaterial triangle of 1nn bonds
+    - Square with 1nn edges and 2nn diagonals
+
+    specify:
+
+    ```py
+    many_body_features = [(0, 0, 0), (0, 0, 0, 0, 1, 1)]
+    ```
+    """
+
+    species: list[str]
+    r"""
+    Species to include within the calculation. For example, for an $\text{Fe}_{1-x}\text{Cr}_x$, system:
+
+    ```py
+    species = ["Fe", "Cr"]
+    ```
+    """
+
+    neighbor_tolerance: float = 0.01
+    r"""
+    Tolerance for nearest neighbor calculations. More specifically, if the nearest neighbor cutoff distance
+    supplied is $d$, then an interaction will be found in the distance shell $[(1-\delta)d, (1+\delta)d]$, where
+    $\delta$ is the neighbor tolerance parameter. If not supplied, the parameter defaults to $0.01$.
+    """
+
+    intensive: dict[str, bool] = field(default_factory=dict)
+    r"""
+    Dictionary specifying whether a target feature is intensive or not. For example, if one wants to predict stress, supply:
+
+    ```py
+    intensive = {"stress": True}
+    ```
+
+    This tells the parent object to "intensify" the feature vectors when training for that specific target parameter, i.e. to 
+    compute per-atom cluster counts rather than raw cluster counts. It not specified, the parameter defaults to:
+
+    ```py
+    intensive = {"energy": False}
+    ```
+    """
+
+    models: dict[str, Model] = field(default_factory=dict)
+    r"""
+    Dictionary specifying which models to use on which parameters. For example, if one wants to predict both energy
+    and stress, and use the Moore-Penrose inverse to train both:
+
+    ```py
+    from tce.training import LimitingRidge
+    models = {"energy": LimitingRidge(), "stress": LimitingRidge()}
+    ```
+
+    Importantly, both models should be their own instances. Specifically, this kind of pattern is not valid:
+
+    ```py
+    from tce.training import Model
+    model: Model = ...
+    models = {"energy": model, "stress": model}
+    ```
+
+    since both models need to have their own set of fitting parameters. If not specified, the parameter defaults to:
+
+    ```py
+    from tce.training import LimitingRidge
+    models = {"energy": LimitingRidge()}
+    ```
+    """
+
+    atomic_numbers: NDArray[np.int64] = field(init=False)
+    r"""
+    Array of atomic numbers of species specified in `self.species`. This should not be initialized by the user,
+    and will instead be generated by the class.
+    """
+
+    topological_tensors: dict[tuple[str, str], dict[int, sparse.COO]] = field(default_factory=dict)
+    r"""
+    Topological tensors cache. This creates a mapping from positions of atoms (and the cell they live within) and 
+    topological tensors $T_{i_1\cdots i_m}^{[\ell]}$, where:
+
+    $$ T_{i_1\cdots i_m}^{[\ell]} = [\text{sites $(i_1, \cdots, i_m)$ are in a cluster of type [$\ell$]}] $$
+
+    Keys in this dictionary come from `tce.topology.hash_topology`, and values are tensors grouped by body order. 
+    For example, for the two-body terms, which are just adjacency matrices:
+
+    ```py
+    from ase import Atoms
+    from tce.topology import hash_topology
+    from tce.calculator import TCECalculator
+    from sparse import COO
+
+    atoms: Atoms = ...
+    calc: TCECalculator = ...
+
+    key = hash_topology(atoms)
+    adjacency_tensors: COO = calc.topological_tensors[key][2]
+    ```
+
+    You can then use this to compute coordination numbers:
+
+    ```py
+    coordination_numbers = adjacency_tensors.sum(axis=1).todense().mean()
+    ```
+    """
+
+    feature_groups: dict[int, list[tuple[int, ...]]] = field(init=False)
+    r"""
+    Feature groups dictionary that groups features by body-order.
+    """
+
+    einsum_strs: dict[int, str] = field(init=False)
+    r"""
+    Dictionary defining tensor contractions for feature groups. For example, the 4-body contribution to the Hamiltonian is:
+
+    $$ \mathcal{H}_4 = \frac{1}{4!}\varepsilon_{\alpha\beta\gamma\delta}^{[\ell]}N_{\alpha\beta\gamma\delta}^{[\ell]} $$
+
+    with feature vector:
+
+    $$ N_{\alpha\beta\gamma\delta}^{[\ell]} = T_{ijkl}^{[\ell]}X_{i\alpha}X_{j\beta}X_{k\gamma}X_{l\delta} $$
+
+    corresponding to an einsum string:
+
+    ```py
+    αβγδ
+    einsum_strs[4] == "Lijkl,iα,jβ,kγ,lδ->Lαβγδ"
+    ```
+    """
+
+    feature_vector_size: int = field(init=False)
+    r"""
+    Feature vector size, i.e.:
+
+    $$ \sum_{n=1}^m a_n|\mathcal{A}|^n $$
+
+    where $n$ denotes the body-order, $a_n$ denotes the number of features with that body-order, 
+    $m$ is the maximum body-order, and $\mathcal{A}$ denotes the set of elements included in the expansion.
+    """
 
     def __post_init__(self):
 
-        for e1, e2 in pairwise(self.cluster_expansions.values()):
-            if e1.cluster_basis != e2.cluster_basis:
-                raise ValueError(f"cluster bases are different in {self.__class__.__name__}")
-            if np.any(e1.type_map != e2.type_map):
-                raise ValueError(f"type maps are different in {self.__class__.__name__}")
+        Calculator.__init__(self)
 
-        self.feature_computers = {}
+        if not self.intensive:
+            self.intensive = {"energy": False}
 
-        expansion_ids = list(self.cluster_expansions.keys())
-        extensive_feature_computer = topological_feature_vector_factory(
-            basis=self.cluster_expansions[expansion_ids[0]].cluster_basis,
-            type_map=self.cluster_expansions[expansion_ids[0]].type_map,
-        )
+        if not self.models:
+            self.models = {"energy": LimitingRidge()}
 
-        expansion_ids = list(self.cluster_expansions.keys())
-        extensive_feature_computer = topological_feature_vector_factory(
-            basis=self.cluster_expansions[expansion_ids[0]].cluster_basis,
-            type_map=self.cluster_expansions[expansion_ids[0]].type_map,
-        )
+        self.atomic_numbers = np.array([atomic_numbers[sym] for sym in self.species], dtype=np.int64)
 
-        def intensive_feature_computer(atoms: Atoms) -> NDArray:
+        self.feature_groups = defaultdict(list)
+        self.einsum_strs = {2: "Lij,iα,jβ->Lαβ"}
+        seen_features: set[tuple[int, ...]] = set()
+        for feature in self.many_body_features:
 
-            return extensive_feature_computer(atoms) / len(atoms)
+            # each feature motif label is size (m choose 2)
+            # where m is the number of atoms in the motif
+            # we want to store m -> [list of features of size m]
+            # len(feature) here is the size of the label
+            # n = (m choose 2) implies that m^2 - m - 2n = 0
+            # so m = (1 + sqrt(1 + 8n)) / 2
 
-        for key in expansion_ids:
-            if key in INTENSIVE_PROPERTIES:
-                self.feature_computers[key] = intensive_feature_computer
-                LOGGER.debug(f"intensive feature computer stored for property {key}")
-            else:
-                self.feature_computers[key] = extensive_feature_computer
-                LOGGER.debug(f"extensive feature computer stored for property {key}")
+            discriminant = 1 + 8 * len(feature)
+            integer_sqrt = isqrt(discriminant)
 
-    def get_property(self, name: str, atoms: Optional[Atoms] = None, allow_calculation: bool = True):
+            if integer_sqrt * integer_sqrt != discriminant or (1 + integer_sqrt) % 2 != 0:
+                raise ValueError(
+                    f"feature {feature} is invalid. Every feature label should have length (m choose 2) "
+                    "where m is an integer"
+                )
+
+            if tuple(sorted(feature)) in seen_features:
+                warnings.warn(f"feature {feature} is a duplicate feature by symmetry")
+            
+            seen_features.add(tuple(sorted(feature)))
+            self.feature_groups[(1 + integer_sqrt) // 2].append(feature)
+
+        # Pre-compute einsum strings for each body order
+        for body_order in self.feature_groups.keys():
+            latin_indices = LATIN_ALPHABET[:body_order]
+            greek_indices = GREEK_ALPHABET[:body_order]
+
+            # build mixed indices i\alpha,j\beta,k\gamma,etc
+            mixed_indices = ','.join(
+                f'{latin}{greek}' for latin, greek in zip(latin_indices, greek_indices)
+            )
+            input_str = f"L{latin_indices},{mixed_indices}"
+            output_str = f"L{greek_indices}"
+            self.einsum_strs[body_order] = f"{input_str}->{output_str}"
+
+        # Pre-compute feature vector size
+        num_species = len(self.species)
+        self.feature_vector_size = len(self.neighbor_cutoffs) * (num_species ** 2)
+        
+        # For body_order >= 3, the number of features is len(feature_groups[body_order])
+        for body_order in self.feature_groups.keys():
+            if body_order >= 3:
+                num_features = len(self.feature_groups[body_order])
+                self.feature_vector_size += num_features * (num_species ** body_order)
+
+        self.implemented_properties = list(self.models.keys())
+    
+
+    def get_feature_label_order(self) -> list[tuple[tuple[int, ...], tuple[str, ...]]]:
 
         r"""
-        compute property from `ase.Atoms` object
+        Returns the ordered feature labels corresponding to the flattened feature vector.
 
-        Args:
-            name (str): name of property
-            atoms (ase.Atoms): atoms object
-            allow_calculation (bool): allow calculation
+        Each feature label is returned as a tuple of two multisets:
+        - the first multiset is the topological feature label (sorted adjacency indices),
+        - the second multiset is the species types in the feature.
         """
 
-        prop = STR_TO_PROPERTY[name]
-        computer = self.feature_computers[prop]
+        labels: list[tuple[tuple[int, ...], tuple[str, ...]]] = []
+        num_species = len(self.species)
+
+        # Two-body features are always present and correspond to the adjacency tensor block.
+        for neighbor_order in range(len(self.neighbor_cutoffs)):
+            topological_label: tuple[int, ...] = (neighbor_order,)
+            for species_indices in product(range(num_species), repeat=2):
+                species_multiset = tuple(
+                        (self.species[idx] for idx in species_indices)
+                    )
+                labels.append((topological_label, species_multiset))
+
+        # Many-body features follow in the same order as `get_topological_tensors`.
+        for body_order, features in self.feature_groups.items():
+            if body_order < 3:
+                continue
+            for feature in features:
+                topological_label = tuple(sorted(feature))
+                for species_indices in product(range(num_species), repeat=body_order):
+                    species_multiset = tuple(
+                        (self.species[idx] for idx in species_indices)
+                    )
+                    labels.append((topological_label, species_multiset))
+
+        return labels
+
+
+    def get_topological_tensors(self, atoms: Atoms) -> dict[int, sparse.COO]:
+
+        r"""
+        Method to compute topological tensors $T_{i_1\cdots i_m}^{[\ell]}$:
+
+        $$ T^{[\ell]}_{i_1\cdots i_m} = \bigvee_{\ell'\in[\ell]}\prod_{(r, s)\in K_m} A_{i_r i_s}^{(\ell_{rs}')} $$
+
+        where $[\ell] = S_m\cdot\ell$ is the equivalence class of $\ell$ induced by the symmetry group $S_m$, 
+        $K_m$ is the [complete graph](https://en.wikipedia.org/wiki/Complete_graph), and $A_{ij}^{(n)}$ is the $n$'th order
+        adjacency tensor:
+
+        $$ A_{ij}^{(n)} = [\text{sites $i$ and $j$ are $n$'th nearest neighbors}] $$
+
+        This function will cache the adjacency tensor computations according to the positions of the input atoms
+
+        Args:
+            atoms (Atoms):
+                The input atoms to compute the topological tensors for, and store in the parent object's cache
+        """
+
+        topology_key = hash_topology(atoms)
+        topological_tensors = self.topological_tensors.get(topology_key)
+
+        if topological_tensors is None:
+            
+            if not np.all(atoms.cell.angles() == 90):
+                raise ValueError("supercells must be orthogonal (for now)")
+
+            tree = KDTree(data=atoms.positions, boxsize=np.diag(atoms.cell))
+
+            # these are boolean, so we can sum corresponding to logical or
+            adjacency_tensors = get_adjacency_tensors(
+                tree=tree,
+                cutoffs=self.neighbor_cutoffs,
+                tolerance=self.neighbor_tolerance
+            )
+            topological_tensors = {2: adjacency_tensors}
+
+            for body_order, features in self.feature_groups.items():
+                
+                final_result_str = LATIN_ALPHABET[:body_order]
+                input_str = ','.join(
+                    f"{i1}{i2}" for i1, i2 in combinations(final_result_str, r=2)
+                )
+                einsum_str = f"{input_str}->{final_result_str}"
+
+                n_body_tensors = []
+                for label in features:
+                    n_body_tensor = sum(
+                        contract(
+                            einsum_str,
+                            *(adjacency_tensors[letter] for letter in permuted_label)
+                        ) for permuted_label in set(permutations(label))
+                    )
+
+                    if not n_body_tensor.nnz:
+                        warnings.warn(f"feature {label} is identically 0")
+                    
+                    n_body_tensors.append(n_body_tensor)
+                
+                stacked_tensors = sparse.stack(n_body_tensors)
+                difference = symmetrize(stacked_tensors, axes=tuple(range(1, 1 + body_order))) - stacked_tensors
+                if difference.nnz and not np.allclose(difference.data, 0):
+                    raise ValueError(
+                        f"Topological tensors for body order {body_order} are not symmetric in indices 1..{body_order}"
+                    )
+                topological_tensors[body_order] = stacked_tensors
+            
+            topological_tensors[2] = sparse.COO(
+                coords=topological_tensors[2].coords,
+                data=topological_tensors[2].data.astype(np.int64),
+                shape=topological_tensors[2].shape
+            )
+            self.topological_tensors[topology_key] = topological_tensors
+
+        return topological_tensors
+
+
+    def get_feature_vector(
+        self,
+        atoms: Atoms
+    ) -> NDArray[np.floating]:
+
+        r"""
+        Method to compute cluster counts and store them in a feature vector:
+
+        $$ N_{\alpha_1\cdots\alpha_m}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{i=1}^m X_{i_n\alpha_n} $$
+
+        $$ \mathbf{t} = \bigoplus_{k=1}^m\bigoplus_{[\ell]\in\Lambda_k} \text{vec}\left( N_{\alpha_1\cdots\alpha_k}^{[\ell]} \right) $$
+
+        where $\oplus$ denotes a direct sum over cluster subspaces, i.e. concatenation.
+
+        Args:
+            atoms (Atoms):
+                Configuration to compute the feature vector for
+        """
+
+        topological_tensors = self.get_topological_tensors(atoms)
+
+        #symbols = np.array(atoms.get_chemical_symbols())
+        indicator_tensor = atoms.numbers[:, None] == self.atomic_numbers[None, :]
+        indicator_tensor = indicator_tensor.astype(float)
+
+        # Pre-allocate feature vector
+        feature_vec = np.zeros(self.feature_vector_size, dtype=np.float64)
+        pos = 0
+        
+        for body_order, t in topological_tensors.items():
+            einsum_str = self.einsum_strs[body_order]
+            cluster_counts = sparse.einsum(
+                einsum_str,
+                t,
+                *repeat(indicator_tensor, body_order)
+            )
+            flattened = cluster_counts.flatten()
+            feature_vec[pos:pos+len(flattened)] = flattened.todense()
+            pos += len(flattened)
+
+        return feature_vec
+
+
+    def _get_feature_vector_difference_for_sites(
+        self,
+        initial: Atoms,
+        final: Atoms,
+        sites: NDArray[np.int64] | list[int]
+    ) -> NDArray[np.floating]:
+
+        r"""
+        Computational shortcut to compute the feature vector $\Delta \mathbf{t}$ for two configurations 
+        that are only separated by a two-cycle, or by one transmutation.
+
+        Args:
+            initial (Atoms):
+                Initial configuration with occupation tensor $\mathbf{X}$
+            final (Atoms):
+                Final configuration with occupation tensor $\mathbf{X}'$
+        """
+
+        if not np.all(np.isclose(initial.positions, final.positions)):
+            raise ValueError("positions of the two configurations differ")
+
+        indicator_tensor = initial.numbers[:, None] == self.atomic_numbers[None, :]
+        X_init = indicator_tensor.astype(float)
+
+        indicator_tensor = final.numbers[:, None] == self.atomic_numbers[None, :]
+        X_final = indicator_tensor.astype(float)
+
+        sites = np.asarray(sites, dtype=np.int64)
+        if len(sites) == 0:
+            return np.zeros(self.feature_vector_size, dtype=np.float64)
+
+        feature_vec_diff = np.zeros(self.feature_vector_size, dtype=np.float64)
+        topological_tensors = self.get_topological_tensors(initial)
+        pos = 0
+
+        for body_order, t in topological_tensors.items():
+            einsum_str = self.einsum_strs[body_order]
+            truncated = sparse.take(t, sites, axis=1)
+
+            initial_truncated = body_order * symmetrize(contract(
+                einsum_str,
+                truncated,
+                X_init[sites, :],
+                *repeat(X_init, body_order - 1)
+            ), axes=tuple(range(1, 1 + body_order)))
+            final_truncated = body_order * symmetrize(contract(
+                einsum_str,
+                truncated,
+                X_final[sites, :],
+                *repeat(X_final, body_order - 1)
+            ), axes=tuple(range(1, 1 + body_order)))
+
+            flattened = (final_truncated - initial_truncated).flatten()
+            if hasattr(flattened, "todense"):
+                flattened = flattened.todense()
+            feature_vec_diff[pos:pos + len(flattened)] = np.asarray(flattened).reshape(-1)
+            pos += len(flattened)
+
+        return feature_vec_diff
+
+
+    def get_feature_vector_difference_two_cycle(
+        self,
+        initial: Atoms,
+        final: Atoms
+    ) -> NDArray[np.floating]:
+
+        r"""
+        Computational shortcut to compute the feature vector $\Delta \mathbf{t}$ for two configurations 
+        that are only separated by a two-cycle. Namely, if there exists a two-cycle $\pi$ such that $\mathbf{X}' = \pi\mathbf{X}$, 
+        then this method returns a shortcut for $\Delta \mathbf{t} = \mathbf{t}(\mathbf{X}') - \mathbf{t}(\mathbf{X})$.
+
+        Args:
+            initial (Atoms):
+                Initial configuration with occupation tensor $\mathbf{X}$
+            final (Atoms):
+                Final configuration with occupation tensor $\mathbf{X}'$
+        """
+
+        sites, _ = np.where(initial.numbers[:, None] != final.numbers[:, None])
+        sites = np.unique(sites)
+        assert len(sites) == 2
+
+        return self._get_feature_vector_difference_for_sites(initial, final, sites)
+
+
+    def get_feature_vector_difference_transmutation(
+        self,
+        initial: Atoms,
+        final: Atoms
+    ) -> NDArray[np.floating]:
+
+        r"""
+        Computational shortcut to compute the feature vector $\Delta \mathbf{t}$ for two configurations 
+        that are only separated by a transmutation. Namely, if $\|\mathbf{X}' - \mathbf{X}\|_{2,0} = 1$.
+
+        Args:
+            initial (Atoms):
+                Initial configuration with occupation tensor $\mathbf{X}$
+            final (Atoms):
+                Final configuration with occupation tensor $\mathbf{X}'$
+        """
+
+        sites = np.flatnonzero(initial.numbers != final.numbers)
+        if len(sites) != 1:
+            raise ValueError("transmutation feature differences require exactly one changed site")
+
+        return self._get_feature_vector_difference_for_sites(initial, final, sites)
+
+
+    def get_feature_vector_difference_nvt(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
+
+        r"""
+        Computational shortcut to compute the feature vector $\Delta \mathbf{t}$ for two configurations 
+        that are only separated by a permutation. Any permutation can be written as a composition of two-cycles, so this
+        function decomposes the permutation in the move $\mathbf{X}' = \pi\mathbf{X}$ into two-cycles, and dispatches the calculation 
+        to a series of two-cycle particle swaps.
+
+        Args:
+            initial (Atoms):
+                Initial configuration with occupation tensor $\mathbf{X}$
+            final (Atoms):
+                Final configuration with occupation tensor $\mathbf{X}'$
+        """
+
+        # in the NVT ensemble, any move is a permutation
+        # and any permutation can be decomposed into two-cycles
+
+        mismatch = initial.numbers != final.numbers
+        num_sites_changed = np.sum(mismatch)
+
+        if num_sites_changed == 0:
+            return np.zeros(self.feature_vector_size, dtype=np.float64)
+
+        if num_sites_changed == 2:
+            return self.get_feature_vector_difference_two_cycle(initial, final)
+
+        # if there's more than 2 sites changed, we can decompose the permutation into two-cycles
+        # this is potentially slow for a large permutation
+        warnings.warn(
+            "More than two sites changed. Decomposing into two-particle swaps. "
+            "This is potentially slow, and it may be better to decompose into two-cycles analytically instead of using this function.",
+            UserWarning
+        )
+
+        swaps = []
+        current = initial.numbers.copy()
+        target = final.numbers.copy()
+        while mismatch.any():
+
+            i = int(np.flatnonzero(mismatch)[0])
+
+            needed = target[i]
+            displaced = current[i]
+
+            candidates = np.flatnonzero(
+                mismatch & (current == needed)
+            )
+
+            reciprocal = candidates[target[candidates] == displaced]
+
+            j = int(reciprocal[0] if len(reciprocal) else candidates[0])
+            swaps.append((i, j))
+
+            current[[i, j]] = current[[j, i]]
+            mismatch[[i, j]] = current[[i, j]] != target[[i, j]]
+
+        total_feature_diff = np.zeros(self.feature_vector_size, dtype=np.float64)
+        for i, j in swaps:
+            intermediate = initial.copy()
+            intermediate.numbers[[i, j]] = intermediate.numbers[[j, i]]
+            total_feature_diff += self.get_feature_vector_difference_two_cycle(initial, intermediate)
+            initial = intermediate
+        
+        return total_feature_diff
+
+
+    def get_feature_vector_difference(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
+
+        r"""
+        Computational shortcut to compute the feature vector $\Delta \mathbf{t}$. This method will 
+        check if the swap should be computed by permutations (canonical ensemble) or transmutations (grand canonical ensemble), 
+        and dispatch accordingly.
+
+        Args:
+            initial (Atoms):
+                Initial configuration with occupation tensor $\mathbf{X}$
+            final (Atoms):
+                Final configuration with occupation tensor $\mathbf{X}'$
+        """
+
+        initial_counts: Multiset = Multiset(initial.numbers)
+        final_counts: Multiset = Multiset(final.numbers)
+
+        count_diff = len(initial_counts - final_counts)
+
+        if count_diff == 0:
+            return self.get_feature_vector_difference_nvt(initial, final)
+
+        if count_diff == 1:
+            return self.get_feature_vector_difference_transmutation(initial, final)
+
+        raise NotImplementedError
+
+    def calculate(
+        self,
+        atoms: Optional[Atoms] = None,
+        properties=['energy'],
+        system_changes=all_changes
+    ):
+
+        Calculator.calculate(self, atoms, properties, all_changes)
 
         if atoms is None:
-            raise ValueError("please provide Atoms object")
+            raise ValueError
 
-        x = computer(atoms).reshape(1, -1)
-        model = self.cluster_expansions[prop].model
-        predicted = model.predict(x)
+        for name in properties:
 
-        if isinstance(predicted, np.ndarray):
-            predicted = predicted.squeeze()
+            if name not in self.implemented_properties:
+                raise PropertyNotImplementedError(f"property {name} not included in models")
 
-        self.results = {name: predicted}
+            feature_vec = self.get_feature_vector(atoms)
+            if self.intensive[name]:
+                feature_vec /= len(atoms)
 
-        return predicted
+            prop = self.models[name].predict(feature_vec.reshape(1, -1))
+            if isinstance(prop, np.ndarray):
+                prop = prop.squeeze()
+            
+            self.results[name] = prop
+
+
+    def train(self, configurations: list[Atoms]):
+
+        r"""
+        Fit each configured model from a list of atomic configurations.
+
+        Each configuration is expected to expose an ASE calculator with a
+        ``get_property`` method for every model key in ``self.models``.
+
+        Args:
+            configurations (list[Atoms]):
+                List of atomic configurations to train the calculator on
+        """
+
+        feature_matrix = np.array([self.get_feature_vector(atoms) for atoms in configurations])
+        num_atoms = np.array([len(atoms) for atoms in configurations])
+
+        for name, model in self.models.items():
+            target = np.array([
+                atoms.calc.get_property(name=name, atoms=atoms)
+                for atoms in configurations
+            ])
+            if self.intensive[name]:        
+                self.models[name] = model.fit(
+                    feature_matrix / num_atoms[:, None], 
+                    target
+                )
+            else:
+                self.models[name] = model.fit(feature_matrix, target)
+
+        return self
+
+
+    def difference_train(self, configuration_pairs: list[tuple[Atoms, Atoms]]):
+
+        r"""
+        Fit each configured model from a list of pairs of atomic configurations.
+
+        Each configuration is expected to expose an ASE calculator with a
+        ``get_property`` method for every model key in ``self.models``.
+
+        This method differs from the ordinary train method in that we difference train, namely fitting a model:
+
+        $$ \Delta p = f(\Delta\mathbf{t}) $$
+
+        where $p$ is any property. This is useful when one would rather predict energy differences over pure energies, 
+        for example when computing energy barriers for vacancy hops as done in our work [here](https://arxiv.org/abs/2605.23612).
+
+        In the case of a linear model $f$, this is equivalent to the ordinary training method, but is more resistant to noise.
+
+        Args:
+            configuration_pairs (list[tuple[Atoms, Atoms]]):
+                Pairs to compute feature vector differences $\Delta \mathbf{t}$ and property differences $\Delta p$
+        """
+
+        for pair in configuration_pairs:
+            assert len(pair[0]) == len(pair[1])
+
+        feature_matrix = np.array([
+            self.get_feature_vector(initial) \
+            - self.get_feature_vector(final)
+            for initial, final in configuration_pairs
+        ])
+        num_atoms = np.array([len(atoms) for atoms, _ in configuration_pairs])
+
+        for name, model in self.models.items():
+
+            target = np.array([
+                initial.calc.get_property(name=name, atoms=initial) \
+                - final.calc.get_property(name=name, atoms=final)
+                for initial, final in configuration_pairs
+            ])
+            if self.intensive[name]:
+                self.models[name].fit(
+                    feature_matrix / num_atoms[:, None],
+                    target
+                )
+            else:
+                self.models[name].fit(feature_matrix, target)
+
+        return self
+
+    def save(self, path: Union[Path, str]):
+
+        r"""
+        Method to serialize the calculator using pickle
+
+        Args:
+            path (Union[Path, str]):
+                Path to save the model to
+        """
+
+        if isinstance(path, str):
+            path = Path(path)
+
+        warnings.warn(
+            f"{self.__class__.__name__} uses pickle for now. This is unsecure! TODO write a serialization method"
+        )
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as file:
+            pickle.dump(self, file)
+
+    
+    @classmethod
+    def load(cls, path: Union[Path, str]) -> "TCECalculator":
+
+        r"""
+        Method to load the calculator from a previous serialization
+
+        Args:
+            path (Union[Path, str]):
+                Path to load the model from
+        """
+
+        warnings.warn(
+            f"{cls.__name__} uses pickle for now. This is unsecure! TODO write a serialization method"
+        )
+
+        if not isinstance(path, Path):
+            path = Path(path)
+
+        with path.open("rb") as file:
+            obj = pickle.load(file)
+
+        if not isinstance(obj, cls):
+            raise ValueError(f"loaded object is not of type {cls.__name__}")
+        return obj

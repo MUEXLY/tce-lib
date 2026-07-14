@@ -1,10 +1,10 @@
 from typing import Callable
-import re
 from tempfile import TemporaryDirectory
 from pathlib import Path
 import pickle
 from dataclasses import dataclass
-from copy import deepcopy
+from itertools import product
+
 from sklearn.linear_model import RidgeCV, LinearRegression, Ridge, Lasso, ElasticNet
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -13,51 +13,39 @@ from sklearn.decomposition import PCA, TruncatedSVD
 import pytest
 import numpy as np
 from numpy.typing import NDArray
-from ase import build
+from ase import build, Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 import sparse
 
-import tce
-from tce.constants import (
-    LatticeStructure,
-    STRUCTURE_TO_THREE_BODY_LABELS,
-    get_three_body_labels,
-    register_new_lattice_structure
-)
-from tce.structures import Supercell
-from tce.training import (
-    ClusterBasis,
-    INCOMPATIBLE_GEOMETRY_MESSAGE,
-    NO_POTENTIAL_ENERGY_MESSAGE,
-    NON_CUBIC_CELL_MESSAGE,
-    LARGE_SYSTEM_MESSAGE,
-    LimitingRidge,
-    ClusterExpansion,
-    train,
-    difference_train
-)
-from tce.topology import symmetrize, topological_feature_vector_factory
-from tce.datasets import PresetDataset, Dataset, available_datasets
-from tce.calculator import TCECalculator, ASEProperty
+from tce.training import LimitingRidge
+from tce.topology import symmetrize
+from tce.datasets import PresetDataset, Dataset
+from tce.calculator import TCECalculator
 from tce.monte_carlo import monte_carlo, transform_model
+from tce.constants import CUTOFFS
 
 
 @pytest.fixture
-def get_supercell() -> Callable[[], Supercell]:
+def get_supercell() -> Callable[[], Atoms]:
 
-    def supercell(lattice_structure: LatticeStructure) -> Supercell:
+    def supercell(lattice_structure: str) -> Atoms:
 
         size = None
-        if lattice_structure == LatticeStructure.SC:
+        if lattice_structure == "sc":
             size = (5, 5, 5)
-        if lattice_structure == LatticeStructure.BCC:
+        if lattice_structure == "bcc":
             size = (4, 4, 4)
-        if lattice_structure == LatticeStructure.FCC:
+        if lattice_structure == "fcc":
             size = (3, 3, 3)
         if not size:
-            raise ValueError("lattice_structure must be SC, BCC, or FCC")
+            raise ValueError("lattice_structure must be sc, bcc, or fcc")
 
-        return Supercell(lattice_structure, lattice_parameter=1.0, size=size)
+        return build.bulk(
+            "X",
+            a=1.0,
+            crystalstructure=lattice_structure, 
+            cubic=True
+        ).repeat(size)
 
     return supercell
 
@@ -65,59 +53,68 @@ def get_supercell() -> Callable[[], Supercell]:
 @pytest.mark.parametrize(
     "lattice_structure, num_expected_neighbors",
     [
-        (LatticeStructure.SC, 6),
-        (LatticeStructure.BCC, 8),
-        (LatticeStructure.FCC, 12)
+        ("sc", 6),
+        ("bcc", 8),
+        ("fcc", 12)
     ]
 )
-def test_num_neighbors(lattice_structure: LatticeStructure, num_expected_neighbors: int, get_supercell):
+def test_num_neighbors(lattice_structure: str, num_expected_neighbors: int, get_supercell):
 
-    with pytest.warns(DeprecationWarning):
-        supercell = get_supercell(lattice_structure)
+    supercell = get_supercell(lattice_structure)
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS[lattice_structure][:1],
+        many_body_features=[],
+        species="X"
+    )
+    calc.get_feature_vector(supercell)
+    
+    topological_tensors, = calc.topological_tensors.values()
+    adjacency_tensor = topological_tensors[2]
 
-    for adj in supercell.adjacency_tensors(max_order=1):
-        assert adj.sum(axis=0).todense().mean() == num_expected_neighbors
+    coord_numbers = adjacency_tensor.sum(axis=1)
+    assert np.isclose(coord_numbers.std(), 0.0)
+    assert coord_numbers.mean() == num_expected_neighbors
 
 
-@pytest.mark.parametrize("lattice_structure", [LatticeStructure.SC, LatticeStructure.BCC, LatticeStructure.FCC])
-def test_feature_vector_shortcut(lattice_structure: LatticeStructure, get_supercell):
+@pytest.mark.filterwarnings("ignore:More than two sites changed")
+@pytest.mark.parametrize(
+    "lattice_structure, permutation_support_size", 
+    list(product(
+        ["sc", "bcc", "fcc"], 
+        range(2, 10)
+    ))
+)
+def test_feature_vector_shortcut(
+    lattice_structure: str,
+    permutation_support_size: int,
+    get_supercell
+):
 
     rng = np.random.default_rng(seed=0)
-    num_types = 3
-
-    with pytest.warns(DeprecationWarning):
-        supercell = get_supercell(lattice_structure)
-
-    types = rng.integers(num_types, size=supercell.num_sites)
-
-    state_matrix = np.zeros((supercell.num_sites, num_types), dtype=int)
-    state_matrix[np.arange(supercell.num_sites), types] = 1
-
-    new_state_matrix = state_matrix.copy()
-    first_site, second_site = rng.integers(supercell.num_sites, size=2)
-    while types[first_site] == types[second_site]:
-        first_site, second_site = rng.integers(supercell.num_sites, size=2)
-    new_state_matrix[first_site, :] = state_matrix[second_site, :]
-    new_state_matrix[second_site, :] = state_matrix[first_site, :]
-
-    clever_diff = supercell.clever_feature_diff(
-        state_matrix, new_state_matrix,
-        max_adjacency_order=2, max_triplet_order=2
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS[lattice_structure][:1],
+        many_body_features=[],
+        species=["Pt", "Au", "Po"]
     )
 
-    feature_vector = supercell.feature_vector(
-        state_matrix,
-        max_adjacency_order=2,
-        max_triplet_order=2
-    )
-    new_feature_vector = supercell.feature_vector(
-        new_state_matrix,
-        max_adjacency_order=2,
-        max_triplet_order=2
-    )
-    naive_diff = new_feature_vector - feature_vector
+    supercell = get_supercell(lattice_structure)
+    supercell.symbols = rng.choice(calc.species, size=len(supercell))
 
-    assert np.all(naive_diff == clever_diff)
+    # Sample a unique set of sites so the reassignment is a true permutation.
+    sites_to_permute = rng.choice(
+        len(supercell),
+        size=permutation_support_size,
+        replace=False
+    )
+    permutation = rng.permutation(sites_to_permute)
+
+    permuted = supercell.copy()
+    permuted.symbols[sites_to_permute] = permuted.symbols[permutation]
+
+    feature_diff = calc.get_feature_vector_difference(supercell, permuted)
+    naive_diff = calc.get_feature_vector(permuted) - calc.get_feature_vector(supercell)
+    
+    assert np.linalg.norm(feature_diff - naive_diff, ord=np.inf) == 0
 
 
 def test_noncubic_cell_raises_value_error():
@@ -127,82 +124,55 @@ def test_noncubic_cell_raises_value_error():
         build.bulk("Cr", crystalstructure="bcc", a=2.7, cubic=False).repeat((3, 3, 3))
     ]
     for configuration in configurations:
-        configuration.calc = SinglePointCalculator(configuration, energy=-1.0)
+        configuration.info["energy"] = -1.0
 
-    with pytest.raises(ValueError, match=NON_CUBIC_CELL_MESSAGE):
-        _ = tce.training.train(
-            configurations=configurations,
-            basis=ClusterBasis(
-                lattice_structure=LatticeStructure.BCC,
-                lattice_parameter=2.7,
-                max_adjacency_order=3,
-                max_triplet_order=1
-            )
-        )
+    calc = TCECalculator(
+        neighbor_cutoffs=[0.5 * np.sqrt(3.0) * 2.7],
+        many_body_features=[],
+        species=["Fe", "Cr"]
+    )
+
+    with pytest.raises(ValueError):
+       calc.train(configurations)
 
 
-def test_inconsistent_geometry_raises_value_error():
-
-    configurations = [
-        build.bulk("Fe", crystalstructure="bcc", a=2.7, cubic=True).repeat((2, 2, 2)),
-        build.bulk("Fe", crystalstructure="fcc", a=2.7, cubic=True).repeat((3, 3, 3))
-    ]
-
-    for configuration in configurations:
-        configuration.calc = SinglePointCalculator(configuration, energy=-1.0)
-
-    with pytest.raises(ValueError, match=INCOMPATIBLE_GEOMETRY_MESSAGE):
-        _ = tce.training.train(
-            configurations=configurations,
-            basis=ClusterBasis(
-                lattice_structure=LatticeStructure.BCC,
-                lattice_parameter=2.7,
-                max_adjacency_order=3,
-                max_triplet_order=1
-            )
-        )
-
-
-def test_no_energy_computation_raises_value_error():
+def test_no_energy_computation_raises_attribute_error():
 
     configurations = [
         build.bulk("Fe", crystalstructure="bcc", a=2.7, cubic=True).repeat((2, 2, 2)),
         build.bulk("Cr", crystalstructure="bcc", a=2.7, cubic=True).repeat((3, 3, 3))
     ]
 
-    with pytest.raises(ValueError, match=NO_POTENTIAL_ENERGY_MESSAGE):
-        _ = tce.training.train(
-            configurations=configurations,
-            basis=ClusterBasis(
-                lattice_structure=LatticeStructure.BCC,
-                lattice_parameter=2.7,
-                max_adjacency_order=3,
-                max_triplet_order=1
-            )
-        )
+    calc = TCECalculator(
+        neighbor_cutoffs=[0.5 * np.sqrt(3.0) * 2.7],
+        many_body_features=[],
+        species=["Fe", "Cr"]
+    )
+
+    with pytest.raises(AttributeError):
+        calc.train(configurations)
 
 
-def test_large_system_in_training(monkeypatch):
+def test_ase_calculator_api_initializes_state():
 
-    with monkeypatch.context() as m:
+    class DummyModel:
+        def predict(self, X):
+            return np.zeros(X.shape[0])
 
-        m.setattr("tce.training.LARGE_SYSTEM_THRESHOLD", 10)
+    atoms = build.bulk("Fe", crystalstructure="bcc", a=2.7, cubic=True).repeat((2, 2, 2))
 
-        configurations = [
-            build.bulk("Fe", crystalstructure="bcc", a=2.7, cubic=True).repeat((2, 2, 2)),
-        ]
-        configurations[0].calc = SinglePointCalculator(configurations[0], energy=-1.0)
+    calc = TCECalculator(
+        models={"energy": DummyModel()},
+        neighbor_cutoffs=[0.5 * np.sqrt(3.0) * 2.7],
+        many_body_features=[],
+        species=["Fe"]
+    )
 
-        with pytest.warns(UserWarning, match=re.escape(LARGE_SYSTEM_MESSAGE)):
-            _ = tce.training.train(
-                configurations=configurations,
-                basis=ClusterBasis(
-                    lattice_structure=LatticeStructure.BCC,
-                    lattice_parameter=2.7,
-                    max_adjacency_order=3,
-                    max_triplet_order=1
-                )
-            )
+    energy = calc.get_potential_energy(atoms)
+
+    assert energy == 0.0
+    assert calc.atoms is not None
+    assert calc.results["energy"] == 0.0
 
 
 @pytest.mark.parametrize("preset_dataset", PresetDataset)
@@ -249,25 +219,21 @@ def test_can_write_and_read_model():
     y = np.array([2, 4, 6])
     lr = LimitingRidge().fit(X, y)
 
-    ce = ClusterExpansion(
-        model=lr,
-        cluster_basis=ClusterBasis(
-            lattice_structure=LatticeStructure.BCC,
-            lattice_parameter=2.7,
-            max_adjacency_order=3,
-            max_triplet_order=1
-        ),
-        type_map=np.array(["Fe", "Cr"])
+    calc = TCECalculator(
+        models={"energy": lr},
+        neighbor_cutoffs=2.7 * CUTOFFS["bcc"][:3],
+        many_body_features=[(0, 0, 1)],
+        species=np.array(["Fe", "Cr"])
     )
 
     with TemporaryDirectory() as directory:
         temp_path = Path(directory) / "model.pkl"
         with pytest.warns(UserWarning):
-            ce.save(temp_path)
-            ce_new = ClusterExpansion.load(temp_path)
+            calc.save(temp_path)
+            calc_new = TCECalculator.load(temp_path)
 
-    assert ce_new.cluster_basis == ce.cluster_basis
-    assert np.all(ce_new.model.coef_ == ce.model.coef_)
+    assert calc_new.einsum_strs == calc.einsum_strs
+    assert np.all(calc_new.models["energy"].coef_ == calc.models["energy"].coef_)
 
 
 def test_bad_pkl_object():
@@ -277,220 +243,69 @@ def test_bad_pkl_object():
         with temp_path.open("wb") as f:
             pickle.dump(object(), f)
         with pytest.raises(ValueError), pytest.warns(UserWarning):
-            _ = ClusterExpansion.load(temp_path)
+            _ = TCECalculator.load(temp_path)
 
 
-@pytest.mark.parametrize("lattice_structure", LatticeStructure)
-def test_computed_labels_equal_cached_labels(lattice_structure: LatticeStructure):
-
-    cached = STRUCTURE_TO_THREE_BODY_LABELS[lattice_structure]
-    loaded = get_three_body_labels(lattice_structure)
-
-    assert np.all(cached == loaded)
-
-
+@pytest.mark.filterwarnings(r"ignore:feature (.*, .*, .*) is identically 0")
 @pytest.mark.parametrize("preset_dataset", PresetDataset)
 def test_can_train_and_attach_calculator(preset_dataset):
 
     dataset = Dataset.from_preset(preset_dataset)
     configurations = dataset.configurations[:10]
-    ce = train(
-        configurations,
-        basis=ClusterBasis(
-            lattice_structure=dataset.lattice_structure,
-            lattice_parameter=dataset.lattice_parameter,
-            max_adjacency_order=3,
-            max_triplet_order=1
-        ),
-        model=LimitingRidge()
+
+    species = np.unique(
+        np.concatenate([
+            atoms.symbols for atoms in configurations
+        ])
     )
 
-    for configuration in configurations:
-        configuration.calc = TCECalculator(
-            cluster_expansions={ASEProperty.ENERGY: ce}
-        )
+    structure = dataset.lattice_structure
+    cutoffs = CUTOFFS[structure][:3]
+
+    calc = TCECalculator(
+        neighbor_cutoffs=dataset.lattice_parameter * cutoffs,
+        many_body_features=[(0, 0, 0), (0, 0, 1)],
+        species=species
+    ).train(configurations)
 
     for configuration in configurations:
+        configuration.calc = calc
         assert isinstance(configuration.calc, TCECalculator)
         _ = configuration.get_potential_energy()
 
 
+@pytest.mark.filterwarnings(r"ignore:feature (.*, .*, .*) is identically 0")
 @pytest.mark.parametrize("preset_dataset", PresetDataset)
 def test_can_difference_train(preset_dataset):
 
     dataset = Dataset.from_preset(preset_dataset)
     configurations = dataset.configurations[:10]
 
+    structure = dataset.lattice_structure
+    cutoffs = CUTOFFS[structure][:3]
+    species = np.unique(
+        np.concatenate([
+            atoms.symbols for atoms in configurations
+        ])
+    )
+
     configuration_pairs = [
         (configurations[0], configurations[1]),
         (configurations[2], configurations[3]),
         (configurations[4], configurations[5])
     ]
-
-    _ = difference_train(
-        configuration_pairs,
-        basis=ClusterBasis(
-            lattice_structure=dataset.lattice_structure,
-            lattice_parameter=dataset.lattice_parameter,
-            max_adjacency_order=3,
-            max_triplet_order=1
-        ),
-        model=LimitingRidge()
-    )
+    _ = TCECalculator(
+        neighbor_cutoffs=dataset.lattice_parameter * cutoffs,
+        many_body_features=[(0, 0, 0), (0, 0, 1)],
+        species=species
+    ).difference_train(configuration_pairs)
 
 
-@pytest.fixture
-def bcc_ce_fixture1():
-
-    rng = np.random.default_rng(seed=0)
-
-    basis = ClusterBasis(
-        lattice_structure=LatticeStructure.BCC,
-        lattice_parameter=2.7,
-        max_adjacency_order=3,
-        max_triplet_order=1
-    )
-
-    type_map = np.sort(np.array(["Fe", "Cr"]))
-
-    @dataclass
-    class SurrogateLinearModel:
-        coeff: NDArray
-
-        def fit(self, X, y) -> "SurrogateLinearModel":
-            raise NotImplementedError
-
-        def predict(self, x) -> float:
-            return np.dot(self.coeff, x)
-
-    two_body_coeffs = rng.normal(
-        loc=-0.1,
-        scale=0.03,
-        size=(basis.max_adjacency_order, len(type_map), len(type_map))
-    )
-    two_body_coeffs = symmetrize(two_body_coeffs, axes=(1, 2)).flatten()
-
-    three_body_coeffs = rng.normal(
-        loc=-0.05,
-        scale=0.02,
-        size=(basis.max_triplet_order, len(type_map), len(type_map), len(type_map))
-    )
-    three_body_coeffs = symmetrize(three_body_coeffs, axes=(2, 3)).flatten()
-
-    return ClusterExpansion(
-        model=SurrogateLinearModel(
-            coeff=np.concatenate((two_body_coeffs, three_body_coeffs))
-        ),
-        cluster_basis=basis,
-        type_map=type_map,
-    )
-
-
-@pytest.fixture
-def bcc_ce_fixture2():
-
-    rng = np.random.default_rng(seed=0)
-
-    basis = ClusterBasis(
-        lattice_structure=LatticeStructure.BCC,
-        lattice_parameter=2.7,
-        max_adjacency_order=2,
-        max_triplet_order=1
-    )
-
-    type_map = np.sort(np.array(["Fe", "Cr"]))
-
-    @dataclass
-    class SurrogateLinearModel:
-        coeff: NDArray
-
-        def fit(self, X, y) -> "SurrogateLinearModel":
-            raise NotImplementedError
-
-        def predict(self, x) -> float:
-            return np.dot(self.coeff, x)
-
-    two_body_coeffs = rng.normal(
-        loc=-0.1,
-        scale=0.03,
-        size=(basis.max_adjacency_order, len(type_map), len(type_map))
-    )
-    two_body_coeffs = symmetrize(two_body_coeffs, axes=(1, 2)).flatten()
-
-    three_body_coeffs = rng.normal(
-        loc=-0.05,
-        scale=0.02,
-        size=(basis.max_triplet_order, len(type_map), len(type_map), len(type_map))
-    )
-    three_body_coeffs = symmetrize(three_body_coeffs, axes=(2, 3)).flatten()
-
-    return ClusterExpansion(
-        model=SurrogateLinearModel(
-            coeff=np.concatenate((two_body_coeffs, three_body_coeffs))
-        ),
-        cluster_basis=basis,
-        type_map=type_map,
-    )
-
-
-def test_different_basis_raises_error(bcc_ce_fixture1, bcc_ce_fixture2):
-
-    tungsten_tantalum_dataset = Dataset.from_preset(PresetDataset.TUNGSTEN_TANTALUM_GENETIC)
-    config = tungsten_tantalum_dataset.configurations[0]
-
-    with pytest.raises(ValueError):
-        config.calc = TCECalculator(
-            cluster_expansions={
-                ASEProperty.ENERGY: bcc_ce_fixture1,
-                ASEProperty.STRESS: bcc_ce_fixture2
-            }
-        )
-
-
-def test_different_type_maps_raises_error(bcc_ce_fixture1):
-
-    second_ce = deepcopy(bcc_ce_fixture1)
-    second_ce.type_map = np.sort(np.array(["Ta", "W"]))
-
-    tungsten_tantalum_dataset = Dataset.from_preset(PresetDataset.TUNGSTEN_TANTALUM_GENETIC)
-    config = tungsten_tantalum_dataset.configurations[0]
-
-    with pytest.raises(ValueError):
-        config.calc = TCECalculator(
-            cluster_expansions={
-                ASEProperty.ENERGY: bcc_ce_fixture1,
-                ASEProperty.STRESS: second_ce
-            }
-        )
-
-def test_can_register_lattice_structure():
-
-    with pytest.warns(UserWarning):
-        register_new_lattice_structure(
-            name="DIAMOND",
-            atomic_basis=np.array([
-                [0.0, 0.0, 0.0],
-                [0.25, 0.25, 0.25],
-                [0.0, 0.5, 0.5],
-                [0.25, 0.75, 0.75],
-                [0.5, 0.0, 0.5],
-                [0.75, 0.25, 0.75],
-                [0.5, 0.5, 0.0],
-                [0.75, 0.75, 0.25]
-            ]),
-            cutoff_list=np.array([
-                0.25 * np.sqrt(3.0), 0.5 * np.sqrt(2.0), 0.25 * np.sqrt(11.0), 1.0
-            ])
-        )
-
-    assert LatticeStructure.DIAMOND in LatticeStructure
-    assert LatticeStructure.DIAMOND in STRUCTURE_TO_THREE_BODY_LABELS
-
+# ========================================================================
 
 def test_floating_point_corrected():
 
     composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
     lattice_parameter = 3.862
     size = (4, 4, 4)
 
@@ -499,7 +314,7 @@ def test_floating_point_corrected():
     type_map = np.array(list(composition.keys()))
     solution = build.bulk(
         type_map[0],
-        crystalstructure=lattice_structure.name.lower(),
+        crystalstructure="fcc",
         cubic=True,
         a=lattice_parameter
     ).repeat(size)
@@ -507,7 +322,7 @@ def test_floating_point_corrected():
 
     @dataclass
     class SurrogateModel:
-        basis: ClusterBasis
+
         coeffs: NDArray[np.floating]
 
         def train(self, X, y):
@@ -517,28 +332,27 @@ def test_floating_point_corrected():
             raise NotImplementedError
 
         def predict(self, x):
-            return np.dot(self.coeffs, x)
+            return np.sum(self.coeffs * x)
 
-    basis = ClusterBasis(
-        lattice_structure=lattice_structure,
-        lattice_parameter=lattice_parameter,
-        max_adjacency_order=2,
-        max_triplet_order=1
-    )
-    feature_length = len(type_map) ** 2 * basis.max_adjacency_order + len(type_map) ** 3 * basis.max_triplet_order
-
-    ce = ClusterExpansion(
-        model=SurrogateModel(
-            basis=basis,
-            coeffs=rng.normal(loc=0.0, scale=2.5e-3, size=feature_length)
-        ),
-        cluster_basis=basis,
-        type_map=type_map
+    feature_length = len(type_map) ** 2 * 2 + len(type_map) ** 3 * 1
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:2] * lattice_parameter,
+        many_body_features=[(0, 0, 0)],
+        species=type_map,
+        models={
+            "energy": SurrogateModel(
+                coeffs=rng.normal(
+                    loc=0.0, 
+                    scale=2.5e-3, 
+                    size=(1, feature_length)
+                )
+            )
+        }
     )
 
     _ = monte_carlo(
         initial_configuration=solution,
-        cluster_expansion=ce,
+        tce_calculator=calc,
         num_steps=1_000,
         beta=11.1,
         generator=rng
@@ -546,8 +360,8 @@ def test_floating_point_corrected():
 
 
 def test_sklearn_model_in_mc():
+
     composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
     lattice_parameter = 3.862
     size = (4, 4, 4)
 
@@ -558,7 +372,7 @@ def test_sklearn_model_in_mc():
     for _ in range(2):
         solution = build.bulk(
             type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
+            crystalstructure="fcc",
             cubic=True,
             a=lattice_parameter
         ).repeat(size)
@@ -566,28 +380,24 @@ def test_sklearn_model_in_mc():
         solution.calc = SinglePointCalculator(solution, energy=rng.normal())
         solutions.append(solution)
 
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=RidgeCV(fit_intercept=False)
-    )
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:2] * lattice_parameter,
+        many_body_features=[(0, 0, 0)],
+        species=type_map,
+        models={"energy": RidgeCV(fit_intercept=False)}
+    ).train(solutions)
 
     _ = monte_carlo(
         initial_configuration=solutions[0],
-        cluster_expansion=ce,
+        tce_calculator=calc,
         num_steps=10,
         beta=11.1
     )
 
 
 def test_sklearn_model_with_intercept_warns_in_mc():
+
     composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
     lattice_parameter = 3.862
     size = (4, 4, 4)
 
@@ -598,7 +408,7 @@ def test_sklearn_model_with_intercept_warns_in_mc():
     for _ in range(2):
         solution = build.bulk(
             type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
+            crystalstructure="fcc",
             cubic=True,
             a=lattice_parameter
         ).repeat(size)
@@ -606,71 +416,25 @@ def test_sklearn_model_with_intercept_warns_in_mc():
         solution.calc = SinglePointCalculator(solution, energy=rng.normal())
         solutions.append(solution)
 
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=RidgeCV()
-    )
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:2] * lattice_parameter,
+        many_body_features=[(0, 0, 0)],
+        species=type_map,
+        models={"energy": RidgeCV(fit_intercept=True)}
+    ).train(solutions)
 
     with pytest.warns(UserWarning):
         _ = monte_carlo(
             initial_configuration=solutions[0],
-            cluster_expansion=ce,
+            tce_calculator=calc,
             num_steps=10,
             beta=11.1
         )
-
-
-def test_sklearn_model_setting_intercept_to_zero_in_mc():
-    composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
-    lattice_parameter = 3.862
-    size = (4, 4, 4)
-
-    rng = np.random.default_rng(seed=0)
-
-    type_map = np.array(list(composition.keys()))
-    solutions = []
-    for _ in range(2):
-        solution = build.bulk(
-            type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
-            cubic=True,
-            a=lattice_parameter
-        ).repeat(size)
-        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
-        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
-        solutions.append(solution)
-
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=RidgeCV()
-    )
-
-    ce.model.intercept_ = 0.0
-
-    _ = monte_carlo(
-        initial_configuration=solutions[0],
-        cluster_expansion=ce,
-        num_steps=10,
-        beta=11.1
-    )
 
 
 def test_sklearn_pipeline_in_mc():
+
     composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
     lattice_parameter = 3.862
     size = (4, 4, 4)
 
@@ -681,7 +445,7 @@ def test_sklearn_pipeline_in_mc():
     for _ in range(2):
         solution = build.bulk(
             type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
+            crystalstructure="fcc",
             cubic=True,
             a=lattice_parameter
         ).repeat(size)
@@ -689,120 +453,32 @@ def test_sklearn_pipeline_in_mc():
         solution.calc = SinglePointCalculator(solution, energy=rng.normal())
         solutions.append(solution)
 
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=Pipeline([
-            ("scale", StandardScaler()),
-            ("fit", RidgeCV(fit_intercept=False))
-        ])
-    )
-
-    _ = monte_carlo(
-        initial_configuration=solutions[0],
-        cluster_expansion=ce,
-        num_steps=10,
-        beta=11.1
-    )
-
-
-def test_sklearn_pipeline_with_intercept_sends_warning_in_mc():
-    composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
-    lattice_parameter = 3.862
-    size = (4, 4, 4)
-
-    rng = np.random.default_rng(seed=0)
-
-    type_map = np.array(list(composition.keys()))
-    solutions = []
-    for _ in range(2):
-        solution = build.bulk(
-            type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
-            cubic=True,
-            a=lattice_parameter
-        ).repeat(size)
-        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
-        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
-        solutions.append(solution)
-
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=Pipeline([
-            ("scale", StandardScaler()),
-            ("fit", RidgeCV())
-        ])
-    )
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:2] * lattice_parameter,
+        many_body_features=[(0, 0, 0)],
+        species=type_map,
+        models={
+            "energy": Pipeline([
+                ("scale", StandardScaler()),
+                ("fit", RidgeCV())
+            ])
+        }
+    ).train(solutions)
 
     with pytest.warns(UserWarning):
         _ = monte_carlo(
             initial_configuration=solutions[0],
-            cluster_expansion=ce,
+            tce_calculator=calc,
             num_steps=10,
             beta=11.1
         )
 
 
-def test_sklearn_pipeline_setting_intercept_to_zero_in_mc():
-    composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
-    lattice_parameter = 3.862
-    size = (4, 4, 4)
-
-    rng = np.random.default_rng(seed=0)
-
-    type_map = np.array(list(composition.keys()))
-    solutions = []
-    for _ in range(2):
-        solution = build.bulk(
-            type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
-            cubic=True,
-            a=lattice_parameter
-        ).repeat(size)
-        solution.symbols = rng.choice(type_map, p=list(composition.values()), size=len(solution))
-        solution.calc = SinglePointCalculator(solution, energy=rng.normal())
-        solutions.append(solution)
-
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=Pipeline([
-            ("scale", StandardScaler()),
-            ("fit", RidgeCV())
-        ])
-    )
-
-    ce.model["fit"].intercept_ = 0.0
-
-    _ = monte_carlo(
-        initial_configuration=solutions[0],
-        cluster_expansion=ce,
-        num_steps=10,
-        beta=11.1
-    )
-
 @pytest.mark.parametrize("beta", [11.1, [11.1]*10, np.linspace(10.0, 12.0, 10), [11.1, 11.1]])
 def test_annealing_mc(beta):
+
     composition = {"Cu": 0.1, "Pd": 0.9}
-    lattice_structure = LatticeStructure.FCC
+    lattice_structure = "fcc"
     lattice_parameter = 3.862
     size = (4, 4, 4)
 
@@ -813,7 +489,7 @@ def test_annealing_mc(beta):
     for _ in range(2):
         solution = build.bulk(
             type_map[0],
-            crystalstructure=lattice_structure.name.lower(),
+            crystalstructure=lattice_structure,
             cubic=True,
             a=lattice_parameter
         ).repeat(size)
@@ -821,23 +497,20 @@ def test_annealing_mc(beta):
         solution.calc = SinglePointCalculator(solution, energy=rng.normal())
         solutions.append(solution)
 
-    ce = train(
-        configurations=solutions,
-        basis=ClusterBasis(
-            lattice_structure=lattice_structure,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=2,
-            max_triplet_order=1
-        ),
-        model=RidgeCV(fit_intercept=False)
-    )
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["fcc"][:2] * lattice_parameter,
+        many_body_features=[(0, 0, 0)],
+        species=type_map,
+        models={"energy": RidgeCV(fit_intercept=False)}
+    ).train(solutions)
+    
     if isinstance(beta, list):
         if len(beta) == 2:
-            # invalid length, should raise error
+            # invalid length. should raise error
             with pytest.raises(AssertionError):
                 _ = monte_carlo(
                     initial_configuration=solutions[0],
-                    cluster_expansion=ce,
+                    tce_calculator=calc,
                     num_steps=10,
                     beta=beta
                 )
@@ -846,20 +519,11 @@ def test_annealing_mc(beta):
     # for now, only tests that no error is raised. TODO: check that correct betas are used
     _ = monte_carlo(
         initial_configuration=solutions[0],
-        cluster_expansion=ce,
+        tce_calculator=calc,
         num_steps=10,
         beta=beta
     )
 
-
-def test_old_preset_loading_method_warns():
-
-    with pytest.warns(DeprecationWarning):
-        dataset_paths = available_datasets()
-    for p in dataset_paths:
-        assert isinstance(p, str)
-        with pytest.warns(DeprecationWarning):
-            _ = Dataset.from_dir(Path(p))
 
 @pytest.mark.parametrize(
     "model",
@@ -888,7 +552,7 @@ def test_energy_diff_transform(model):
     fe_cohesive_energy = 4.0
     cr_cohesive_energy = 3.0
 
-    # just fit some dummy CE using pure Fe, pure Cr, and a 50/50
+    # fit some dummy CE using pure Fe, pure Cr, and a 50/50
     pure_fe = build.bulk("Fe", crystalstructure="bcc", a=3.0, cubic=True).repeat((5, 5, 5))
     pure_fe.calc = SinglePointCalculator(pure_fe, energy=len(pure_fe) * -fe_cohesive_energy)
     pure_cr = build.bulk("Cr", crystalstructure="bcc", a=3.0, cubic=True).repeat((5, 5, 5))
@@ -900,41 +564,30 @@ def test_energy_diff_transform(model):
         energy=len(mixture) * -0.5 * (fe_cohesive_energy + cr_cohesive_energy)
     )
 
-    basis = ClusterBasis(
-        lattice_structure=LatticeStructure.BCC,
-        lattice_parameter=3.0,
-        max_adjacency_order=2,
-        max_triplet_order=1
-    )
-    feature_vector_calculator = topological_feature_vector_factory(
-        basis=basis,
-        type_map=np.array(["Cr", "Fe"])
-    )
-    ce = train(
-        configurations=[pure_fe, pure_cr, mixture],
-        basis=basis,
-        feature_computer=feature_vector_calculator,
-        model=model
-    )
-
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["bcc"][:2] * 3.0,
+        many_body_features=[(0, 0, 1)],
+        species=["Fe", "Cr"],
+        models={"energy": model}
+    ).train([pure_fe, pure_cr, mixture])
 
     new_mixture = pure_fe.copy()
     new_mixture.symbols = rng.choice(["Fe", "Cr"], size=len(new_mixture))
-    new_mixture.calc = TCECalculator(cluster_expansions={ASEProperty.ENERGY: ce})
+    new_mixture.calc = calc
 
     attempt = new_mixture.copy()
     assert attempt.symbols[5] != attempt.symbols[10]
     attempt.symbols[5] = new_mixture.symbols[10]
     attempt.symbols[10] = new_mixture.symbols[5]
-    attempt.calc = TCECalculator(cluster_expansions={ASEProperty.ENERGY: ce})
+    attempt.calc = calc
 
     energy_diff = attempt.get_potential_energy() - new_mixture.get_potential_energy()
     assert np.abs(energy_diff) > 1.0e-6
 
     # from feature vector diff
-    ce.model = transform_model(ce.model)
-    first_feature_vector = feature_vector_calculator(new_mixture)
-    second_feature_vector = feature_vector_calculator(attempt)
+    calc.models["energy"] = transform_model(calc.models["energy"])
+    first_feature_vector = calc.get_feature_vector(new_mixture)
+    second_feature_vector = calc.get_feature_vector(attempt)
     feature_diff = second_feature_vector - first_feature_vector
-    energy_diff_from_delta = ce.model.predict(feature_diff.reshape(1, -1)).squeeze()
-    assert np.isclose(energy_diff, energy_diff_from_delta)
+    energy_diff_from_delta = calc.models["energy"].predict(feature_diff.reshape(1, -1)).squeeze()
+    assert np.isclose(energy_diff, energy_diff_from_delta), f"{energy_diff}, {energy_diff_from_delta}"

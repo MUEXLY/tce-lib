@@ -11,7 +11,6 @@ from ovito.qt_compat import QtCore
 from ovito.data import DataCollection
 import numpy as np
 
-# from tce.datasets import Dataset, available_datasets
 from tce.datasets import Dataset, PresetDataset
 
 

@@ -1,11 +1,9 @@
 r"""
-This module tells `tce-lib` how to compute topological tensors and their corresponding features, including how to
-compute local feature differences for efficient Monte Carlo runs.
+This module tells `tce-lib` how to compute adjacency tensors and has various other utilities.
 """
 
 from itertools import permutations
-from typing import Optional, Union, TypeAlias, Callable
-from functools import wraps
+from typing import Optional, Union
 import hashlib
 import logging
 
@@ -13,15 +11,7 @@ from scipy.spatial import KDTree
 import numpy as np
 from numpy.typing import NDArray
 import sparse
-from opt_einsum import contract
 from ase import Atoms
-
-from .constants import (
-    LatticeStructure,
-    STRUCTURE_TO_THREE_BODY_LABELS,
-    ClusterBasis,
-    STRUCTURE_TO_CUTOFF_LISTS
-)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -89,162 +79,6 @@ def get_adjacency_tensors(
     ])
 
 
-def get_three_body_tensors(
-    lattice_structure: LatticeStructure,
-    adjacency_tensors: sparse.COO,
-    max_three_body_order: int,
-) -> sparse.COO:
-
-    r"""
-    compute three-body tensors $B_{ijk}^{(n)}$:
-
-    $$ B_{ijk}^{(n)} = \bigvee_{\sigma\in S_3}
-        A_{ij}^{(\sigma(\mathfrak{a}))}A_{jk}^{(\sigma(\mathfrak{b}))}A_{ki}^{(\sigma(\mathfrak{c}))} $$
-
-    where the mapping between $n$ and $(\mathfrak{a}, \mathfrak{b}, \mathfrak{c})$ is defined by
-    `constants.STRUCTURE_TO_THREE_BODY_LABELS`.
-
-    Args:
-        lattice_structure (LatticeStructure):
-            The lattice structure to compute three-body tensors from. this argument is chiefly used here to grab three
-            body labels, which depend on lattice structure.
-        adjacency_tensors (sparse.COO):
-            Adjacency tensors $A_{ij}^{(n)}$ of shape `(number of neighbors, number of sites, number of sites)`
-        max_three_body_order (int):
-            Maximum neighbor order of three-body tensors.
-    """
-
-    labels = STRUCTURE_TO_THREE_BODY_LABELS[lattice_structure]
-
-    three_body_labels = [
-        labels[order] for order in range(max_three_body_order)
-    ]
-
-    three_body_tensors = sparse.stack([
-        sum(
-            sparse.einsum(
-                "ij,jk,ki->ijk",
-                adjacency_tensors[i],
-                adjacency_tensors[j],
-                adjacency_tensors[k]
-            ) for i, j, k in set(permutations(labels))
-        ) for labels in three_body_labels
-    ])
-
-    return three_body_tensors
-
-
-def get_feature_vector(adjacency_tensors: sparse.COO,
-    three_body_tensors: sparse.COO,
-    state_matrix: NDArray
-) -> NDArray:
-
-    r"""
-    topological feature vector $\mathbf{t}$ with components $N_{\alpha\beta}^{(n)} = A_{ij}^{(n)}X_{i\alpha}X_{j\beta}$
-    and $M_{\alpha\beta\gamma}^{(n)} = B_{ijk}^{(n)} X_{i\alpha}X_{j\beta}X_{k\gamma}$.
-
-    Args:
-        adjacency_tensors (sparse.COO):
-            Adjacency tensors $A_{ij}^{(n)}$ of shape `(number of neighbors, number of sites, number of sites)`.
-        three_body_tensors (sparse.COO):
-            Three body tensors $B_{ijk}^{(n)}$ of shape
-            `(number of neighbors, number of sites, number of sites, number of sites, number of sites)`.
-        state_matrix (np.ndarray):
-            The state tensor $\mathbf{X}$, defined by $X_{i\alpha} = [\text{site $i$ occupied by type $\alpha$}]$,
-            where $[\cdot]$ is the [Iverson bracket](https://en.wikipedia.org/wiki/Iverson_bracket).
-    """
-
-    return np.concatenate([
-        contract(
-            "nij,iα,jβ->nαβ",
-            adjacency_tensors,
-            state_matrix,
-            state_matrix
-        ).flatten(),
-        contract(
-            "nijk,iα,jβ,kγ->nαβγ",
-            three_body_tensors,
-            state_matrix,
-            state_matrix,
-            state_matrix
-        ).flatten()
-    ])
-
-
-def get_feature_vector_difference(
-    adjacency_tensors: sparse.COO,
-    three_body_tensors: sparse.COO,
-    initial_state_matrix: NDArray,
-    final_state_matrix: NDArray
-) -> NDArray:
-
-    r"""
-    shortcut method for computing feature vector difference
-    $\Delta\mathbf{t} = \mathbf{t}(\mathbf{X}') - \mathbf{t}(\mathbf{X})$ between two nearby states
-
-    Args:
-        adjacency_tensors (sparse.COO):
-            Adjacency tensors $A_{ij}^{(n)}$ of shape `(number of neighbors, number of sites, number of sites)`.
-        three_body_tensors (sparse.COO):
-            Three body tensors $B_{ijk}^{(n)}$ of shape
-            `(number of neighbors, number of sites, number of sites, number of sites, number of sites)`.
-        initial_state_matrix (NDArray):
-            The initial state tensor $\mathbf{X}$.
-        final_state_matrix (NDArray):
-            The final state tensor $\mathbf{X}'$.
-    """
-
-    sites, _ = np.where(initial_state_matrix != final_state_matrix)
-    sites = np.unique(sites).tolist()
-
-    truncated_adj = sparse.take(adjacency_tensors, sites, axis=1)
-    initial_feature_vec_truncated = 2 * symmetrize(contract(
-        "nij,iα,jβ->nαβ",
-        truncated_adj,
-        initial_state_matrix[sites, :],
-        initial_state_matrix
-    ), axes=(1, 2)).flatten()
-    final_feature_vec_truncated = 2 * symmetrize(contract(
-        "nij,iα,jβ->nαβ",
-        truncated_adj,
-        final_state_matrix[sites, :],
-        final_state_matrix
-    ), axes=(1, 2)).flatten()
-
-    truncated_thr = sparse.take(three_body_tensors, sites, axis=1)
-    initial_feature_vec_truncated = np.concatenate(
-        [
-            initial_feature_vec_truncated,
-            3 * symmetrize(contract(
-                "nijk,iα,jβ,kγ->nαβγ",
-                truncated_thr,
-                initial_state_matrix[sites, :],
-                initial_state_matrix,
-                initial_state_matrix
-            ), axes=(1, 2, 3)).flatten()
-        ]
-    )
-    final_feature_vec_truncated = np.concatenate(
-        [
-            final_feature_vec_truncated,
-            3 * symmetrize(contract(
-                "nijk,iα,jβ,kγ->nαβγ",
-                truncated_thr,
-                final_state_matrix[sites, :],
-                final_state_matrix,
-                final_state_matrix
-            ), axes=(1, 2, 3)).flatten()
-        ]
-    )
-    return final_feature_vec_truncated - initial_feature_vec_truncated
-
-
-FeatureComputer: TypeAlias = Callable[[Atoms], NDArray[np.floating]]
-r"""
-Type alias defining a feature computer, which is in general a function that takes in an `ase.Atoms` object and returns a
-feature vector. 
-"""
-
 def hash_numpy_array(v: NDArray) -> str:
 
     r"""
@@ -273,61 +107,3 @@ def hash_topology(atoms: Atoms) -> tuple[str, str]:
     cell_hash = hash_numpy_array(atoms.cell)
 
     return positions_hash, cell_hash
-
-
-def topological_feature_vector_factory(
-    basis: ClusterBasis,
-    type_map: NDArray[np.str_],
-    tolerance: float = 0.01
-) -> FeatureComputer:
-
-    r"""
-    Factory method for creating a topological feature vector computer.
-
-    Args:
-        basis (ClusterBasis):
-            cluster basis for the topological feature vector computer
-        type_map (NDArray[np.str_]):
-            chemical type map that defines how chemical species are ordered
-        tolerance (float):
-            tolerance for distance binning
-    """
-
-    num_types = len(type_map)
-    inverse_type_map = {v: k for k, v in enumerate(type_map)}
-
-    topology_cache: dict[tuple[str, str, ClusterBasis], tuple[sparse.COO, sparse.COO]] = {}
-
-    @wraps(topological_feature_vector_factory)
-    def wrapper(atoms: Atoms):
-        key = (*hash_topology(atoms), basis)
-        if key in topology_cache:
-            adjacency_tensors, three_body_tensors = topology_cache[key]
-            LOGGER.debug(f"topological tensors loaded from cache (key {key})")
-        else:
-            tree = KDTree(atoms.positions, boxsize=np.diag(atoms.cell))
-            adjacency_tensors = get_adjacency_tensors(
-                tree=tree,
-                cutoffs=basis.lattice_parameter * STRUCTURE_TO_CUTOFF_LISTS[basis.lattice_structure][
-                                                  :basis.max_adjacency_order],
-                tolerance=tolerance,
-            )
-            three_body_tensors = get_three_body_tensors(
-                lattice_structure=basis.lattice_structure,
-                adjacency_tensors=adjacency_tensors,
-                max_three_body_order=basis.max_triplet_order,
-            )
-            topology_cache[key] = adjacency_tensors, three_body_tensors
-            LOGGER.debug(f"topological tensors computed and stored in cache (key {key})")
-
-        state_matrix = np.zeros((len(atoms), num_types))
-        for site, symbol in enumerate(atoms.symbols):
-            state_matrix[site, inverse_type_map[symbol]] = 1.0
-
-        return get_feature_vector(
-            adjacency_tensors=adjacency_tensors,
-            three_body_tensors=three_body_tensors,
-            state_matrix=state_matrix
-        )
-
-    return wrapper

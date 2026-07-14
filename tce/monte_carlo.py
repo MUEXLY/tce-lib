@@ -6,83 +6,23 @@ model.
 
 from typing import Optional, Callable, TypeAlias, Sequence
 import logging
-from functools import wraps
 import warnings
 
 import numpy as np
 from numpy.typing import NDArray
 from ase import Atoms
-from ase.calculators.singlepoint import SinglePointCalculator
-from scipy.spatial import KDTree
 
-from tce.constants import STRUCTURE_TO_CUTOFF_LISTS
-from tce.topology import get_adjacency_tensors, get_three_body_tensors, get_feature_vector, \
-    get_feature_vector_difference
-from tce.training import ClusterExpansion, Model, LimitingRidge
+from tce.training import Model, LimitingRidge
+from tce.calculator import TCECalculator
 
 
 LOGGER = logging.getLogger(__name__)
 """@private"""
 
-MCStep: TypeAlias = Callable[[NDArray[np.floating]], NDArray[np.floating]]
+MCStep: TypeAlias = Callable[[Atoms], Atoms]
 r"""
 Type alias defining what a step in a monte carlo simulation looks like. In general, a step should look like a function 
-that takes in a state matrix $\mathbf{X}$, and returns a new one.
-"""
-
-
-def two_particle_swap_factory(generator: np.random.Generator) -> MCStep:
-
-    r"""
-    Factory to create a sensible MC step, which is to swap two particles.
-
-    Args:
-        generator (np.random.Generator): Random number generator to be used to sample a new MC step
-    """
-
-    @wraps(two_particle_swap_factory)
-    def wrapper(state_matrix: NDArray) -> NDArray[np.floating]:
-
-        new_state_matrix = state_matrix.copy()
-        i, j = generator.integers(len(state_matrix), size=2)
-        new_state_matrix[i], new_state_matrix[j] = state_matrix[j], state_matrix[i]
-        return new_state_matrix
-
-    return wrapper
-
-
-EnergyModifier: TypeAlias = Callable[[NDArray[np.floating], NDArray[np.floating]], float]
-r"""
-Type alias defining what an energy modifier should look like. In general, a modifier should look like a function that 
-takes in two state matrices $\mathbf{X}$ and $\mathbf{X}'$ and returns the term to be added to the energy difference 
-$\Delta E$. For example, if you want to simulate a grand canonical ensemble, the Metropolis acceptance criterion is:
-
-$$ \exp\left(-\beta\left(\Delta E - \sum_\alpha \mu_\alpha \Delta N_\alpha\right)\right) = \exp\left(-\beta\left(\Delta E - \boldsymbol{\mu}\cdot\Delta\mathbf{N}\right)\right) > u $$
-
-for a random number $u$ from $\text{Uniform}(0, 1)$. You can implement this strategy by defining an energy modifier:
-
-```py
-from typing import Callable
-from functools import wraps
-
-import numpy as np
-
-def energy_modifier_factory(
-    chemical_potentials: NDArray[np.floating]
-) -> Callable[[NDArray[np.floating], NDArray[np.floating]], float]:
-
-    @wraps(energy_modifier_factory)
-    def wrapper(
-        state_matrix: NDArray[np.floating],
-        new_state_matrix: NDArray[np.floating]
-    ) -> float:
-        change_in_num_types = new_state_matrix.sum(axis=0) - state_matrix.sum(axis=0)
-        return -chemical_potentials @ change_in_num_types
-
-    return wrapper
-```
-
-You can see a concrete example of the above energy modifier [here](https://github.com/MUEXLY/tce-lib#training-monte-carlo).
+that takes in a state $\mathbf{X}$, and returns a new one.
 """
 
 
@@ -128,18 +68,7 @@ def transform_model(model: Model) -> Model:
     `sklearn.preprocessing.StandardScaler`
     ([here](https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html)), or
     `sklearn.decomposition.PCA` ([here](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html)),
-    zero'ing out the mean introduces an artificial intercept.
-
-    For a cluster expansion object that you wish to use in an MC simulation, you can use this transformation:
-
-    ```py
-    from tce.training import ClusterExpansion
-    from tce.monte_carlo import transform_model, monte_carlo
-
-    ce: ClusterExpansion = ...
-    ce.model = transform(ce.model)
-    trajectory = monte_carlo(cluster_expansion=ce, ...)
-    ```
+    zero'ing out the mean introduces an artificial intercept. This function is called automatically by `tce.monte_carlo.monte_carlo` to address this.
 
     **IMPORTANT**: This transformation is not possible to write in the general case. We have implemented this for a
     relatively large set of cases of `sklearn`-derived models, including `sklearn.pipeline.Pipeline`. Do not expect
@@ -211,80 +140,76 @@ def transform_model(model: Model) -> Model:
     raise NotImplementedError
 
 
-def null_energy_modifier(
-    state_matrix: NDArray[np.floating],
-    new_state_matrix: NDArray[np.floating]
-) -> float:
-
-    r"""
-    Default energy modifier, which does nothing to the total energy
-    """
-
-    return 0.0
-
-
 def monte_carlo(
     initial_configuration: Atoms,
-    cluster_expansion: ClusterExpansion,
+    tce_calculator: TCECalculator,
     num_steps: int,
     beta: float | Sequence[float] | NDArray[np.floating],
     save_every: int = 1,
     generator: Optional[np.random.Generator] = None,
-    mc_step: Optional[MCStep] = None,
-    energy_modifier: Optional[EnergyModifier] = None,
+    mc_step: Optional[Callable[[Atoms], Atoms]] = None,
+    energy_modifier: Optional[Callable[[Atoms, Atoms], float]] = None,
     callback: Optional[Callable[[int, int], None]] = None
 ) -> list[Atoms]:
 
     r"""
-    monte Carlo simulation from on a lattice defined by a Supercell
+    New Monte Carlo simulation function that uses the `transform_model` function to transform the model to predict
+    from $\Delta$'s. This is a more robust implementation that should work for most models, including pipelines.
 
     Args:
         initial_configuration (Atoms):
-            initial atomic configuration to perform MC on
-        cluster_expansion (ClusterExpansion):
-            Container defining training data. see `tce.training.ClusterExpansion` for more info. this will usually
-            be created by `tce.training.train`.
+            Initial configuration to start the MC run on. In most cases, it's wise to start from a fully random solution
+        tce_calculator (TCECalculator):
+            TCE calculator to calculate both feature vector differences and energy differences. This should be a trained instance, 
+            trained with either `tce.calculator.TCECalculator.train` or `tce.calculator.TCECalculator.difference_train`.
         num_steps (int):
-            Number of Monte Carlo steps to perform
-        beta (float, Sequence[float], np.array):
-            Thermodynamic $\beta$, defined by $\beta = 1/(k_BT)$, where $k_B$ is the Boltzmann constant and $T$ is
-            absolute temperature. ensure that $k_B$ is in proper units such that $\beta$ is in appropriate units. for
-            example, if the training data had energy units of eV, then $k_B$ should be defined in units of eV/K.
-            If beta is a float, then the same beta value is used for all MC steps. if beta is a sequence of floats,
-            then for each step `i`, `beta[i]` is used. in this case, the length of the sequence must be equal to
-            `num_steps`.
+            Number of MC steps to perform.
+        beta (float | Sequence[float] | NDArray[np.floating]):
+            Thermodynamic beta to run the MC simulation at, defined by $\beta = 1 / (kT)$, where $k$ is the 
+            [Boltzmann constant](https://en.wikipedia.org/wiki/Boltzmann_constant) and $T$ is absolute temperature. If specified as 
+            a float, then each MC step will use this value of `beta`. If specified as a sequence, then each step will have its own 
+            `beta`, which is useful for [simulated annealing](https://en.wikipedia.org/wiki/Simulated_annealing)
         save_every (int):
-            How many steps to perform before saving the MC frame. this is similar to LAMMPS's `dump_every` argument
-            in the `dump` command
-        generator (Optional[np.random.Generator]):
-            Generator instance drawing random numbers. if not specified, set to `np.random.default_rng(seed=0)`
-        mc_step (Optional[MCStep]):
-            Monte Carlo simulation step. if not specified, assume that the user wants to swap 2 particles per step.
-        energy_modifier (Optional[Callable[[NDArray[np.floating], NDArray[np.floating]], float]]):
-            Energy modifier when performing MC run. each acceptance rule looks very similar for different ensembles,
-            i.e., if $\exp(-\beta \Delta H) > u$, where $u$ is a random number drawn from $ [0, 1] $, then accept the swap.
-            $\Delta H$, generally, is of the form:
-            $$ \Delta H = \Delta E + f(\mathbf{X}, \mathbf{X}') $$
-            For example, for the [grand canonical ensemble](https://en.wikipedia.org/wiki/Grand_canonical_ensemble):
-            $$ f(\mathbf{X}, \mathbf{X}') = -\sum_\alpha \mu_\alpha\Delta N_\alpha $$
-            where $\mu_\alpha$ is the chemical potential of type $\alpha$ and $\Delta N_\alpha$ is change in the number
-            of $\alpha$ atoms upon swapping. if unspecified, then energy is not modified throughout the run, which
-            samples the [canonical ensemble](https://en.wikipedia.org/wiki/Canonical_ensemble).
-        callback (Optional[Callable[[int, int], None]]):
-            Optional callback function that will be called after each step. will take in the current step and the
-            number of overall steps. if not specified, defaults to a call to LOGGER.info
+            After how many steps to save each configuration. This defaults to `1`, but this default value is often too small. 
+            It is wise to pick a value such that `num_steps // save_every` is around `1000`, i.e. you only save `1000` frames of the 
+            simulation.
+        generator (np.random.Generator):
+            Generator to compute the necessary random numbers. If not specified, defaults to `np.random.default_rng(seed=0)`.
+        mc_step (Callable[[Atoms], Atoms]):
+            MC step to attempt. If not specified, the function will assume the user wants to perform standard canonical MC, 
+            and will attempt a two-particle swap at each step, i.e.:
 
+            ```py
+            def mc_step(atoms: Atoms) -> Atoms:
+                new_atoms = atoms.copy()
+                i, j = generator.integers(len(atoms), size=2)
+                new_atoms[i].symbol, new_atoms[j].symbol = new_atoms[j].symbol, new_atoms[i].symbol
+                return new_atoms
+            ```
+        energy_modifier (Callable[[Atoms, Atoms], float]):
+            Modifier to add to energies. If not specified, the function will assume the user wants to perform standard canonical 
+            MC, and will simply use the energy as the thermodynamic potential. See the grand canonical MC example 
+            [here](https://github.com/MUEXLY/tce-lib/blob/main/examples/1-copper-nickel-mc2.py) for how to use this 
+            argument to change the ensemble sampled.
     """
 
     if not generator:
         generator = np.random.default_rng(seed=0)
-    if not mc_step:
-        mc_step = two_particle_swap_factory(generator=generator)
-    if not energy_modifier:
-        energy_modifier = null_energy_modifier
+
     if not callback:
         def callback(step_: int, num_steps_: int):
             LOGGER.info(f"MC step {step_:.0f}/{num_steps_:.0f}")
+
+    if not mc_step:
+        def mc_step(atoms: Atoms) -> Atoms:
+            new_atoms = atoms.copy()
+            i, j = generator.integers(len(atoms), size=2)
+            new_atoms[i].symbol, new_atoms[j].symbol = new_atoms[j].symbol, new_atoms[i].symbol
+            return new_atoms
+
+    if not energy_modifier:
+        def energy_modifier(initial: Atoms, final: Atoms) -> float:
+            return 0.0
 
     if isinstance(beta, (Sequence, np.ndarray)):
         assert len(beta) == num_steps, "if beta is a sequence, it must be the same length as num_steps"
@@ -294,104 +219,49 @@ def monte_carlo(
     else:
         raise TypeError("beta must be either a float or a sequence of floats")
 
-    num_types = len(cluster_expansion.type_map)
 
-    lattice_structure = cluster_expansion.cluster_basis.lattice_structure
-    lattice_parameter = cluster_expansion.cluster_basis.lattice_parameter
-
-    tree = KDTree(
-        data=initial_configuration.positions,
-        boxsize=np.diag(initial_configuration.get_cell()[:])
-    )
-    cutoffs = STRUCTURE_TO_CUTOFF_LISTS[lattice_structure][:cluster_expansion.cluster_basis.max_adjacency_order]
-    adjacency_tensors = get_adjacency_tensors(
-        tree=tree,
-        cutoffs=lattice_parameter * cutoffs
-    )
-    three_body_tensors = get_three_body_tensors(
-        lattice_structure=lattice_structure,
-        adjacency_tensors=adjacency_tensors,
-        max_three_body_order=cluster_expansion.cluster_basis.max_triplet_order
-    )
-
-    inverse_type_map = {v: k for k, v in enumerate(cluster_expansion.type_map)}
-    initial_types = np.fromiter((
-        inverse_type_map[symbol] for symbol in initial_configuration.get_chemical_symbols()
-    ), dtype=int)
-
-    state_matrix: NDArray[np.floating] = np.zeros((len(initial_configuration), num_types), dtype=float)
-    state_matrix[np.arange(len(initial_configuration)), initial_types] = 1
-
-    trajectory = []
-    feature_vector = get_feature_vector(
-        adjacency_tensors=adjacency_tensors,
-        three_body_tensors=three_body_tensors,
-        state_matrix=state_matrix,
-    )
-
-    if getattr(cluster_expansion.model, "intercept_", 0.0):
+    # try to pass zeros into the model
+    zero_feature = np.zeros(tce_calculator.feature_vector_size).reshape(1, -1)
+    predicted = tce_calculator.models["energy"].predict(zero_feature)
+    if isinstance(predicted, np.ndarray):
+        predicted = predicted.item()
+    if predicted != 0.0:
         warnings.warn(
-            "Your model object has a non-zero intercept_ attribute. If your intercept is non-zero, the feature "
-            "difference calculation will not work, i.e. E_2 - E_1 = (α + βx_2) - (α + βx_1) = β(x_2 - x_1), so your "
-            "incoming model should be intercept-less. See "
-            "https://muexly.github.io/tce-lib/tce/monte_carlo.html#transform_model"
+            "Input model has an intercept, which will mess with energy difference calculations. "
+            "The monte carlo run will automatically zero-out this intercept, transforming your model.",
+            UserWarning
         )
+        
+    transformed_model = transform_model(tce_calculator.models["energy"])
 
-    if steps := getattr(cluster_expansion.model, "steps", False):
-        assert isinstance(steps, list) and isinstance(steps[-1], tuple)
-        final_step_name, final_step_estimator = steps[-1]
-
-        if getattr(final_step_estimator, "intercept_", 0.0):
-            warnings.warn(
-                "Your pipeline object has a non-zero intercept_ attribute in the final step. If your intercept is "
-                "non-zero, the feature difference calculation will not work, i.e. E_2 - E_1 = (α + βx_2) - (α + βx_1) "
-                "= β(x_2 - x_1), so your incoming model should be intercept-less. See "
-                "https://muexly.github.io/tce-lib/tce/monte_carlo.html#transform_model"
-            )
-
-    try:
-        energy = cluster_expansion.model.predict(feature_vector)
-    except ValueError:
-        feature_vector = feature_vector.reshape(1, -1)
-        energy = cluster_expansion.model.predict(feature_vector)
-        if not isinstance(energy, float):
-            energy = energy.item()
-    LOGGER.debug(f"initial energy is {energy}")
+    energy = transformed_model.predict(
+        tce_calculator.get_feature_vector(initial_configuration).reshape(1, -1)
+    )
+    if isinstance(energy, np.ndarray):
+        energy = energy.item()
+    
+    trajectory = []
     for step in range(num_steps):
-
         callback(step, num_steps)
 
         if not step % save_every:
-            _, types = np.where(state_matrix)
-            atoms = initial_configuration.copy()
-            atoms.set_chemical_symbols(symbols=cluster_expansion.type_map[types])
-            atoms.calc = SinglePointCalculator(atoms=atoms, energy=energy)
-            trajectory.append(atoms)
+            to_save = initial_configuration.copy()
+            to_save.info["energy"] = energy
+            trajectory.append(to_save)
             LOGGER.info(f"saved configuration at step {step:.0f}/{num_steps:.0f}")
 
-        new_state_matrix = mc_step(state_matrix)
-        feature_diff = get_feature_vector_difference(
-            adjacency_tensors=adjacency_tensors,
-            three_body_tensors=three_body_tensors,
-            initial_state_matrix=state_matrix,
-            final_state_matrix=new_state_matrix,
-        )
-        try:
-            energy_diff = cluster_expansion.model.predict(feature_diff)
-        except ValueError:
-            feature_diff = feature_diff.reshape(1, -1)
-            energy_diff = cluster_expansion.model.predict(feature_diff)
-            if not isinstance(energy_diff, float):
-                energy_diff = energy_diff.item()
+        new_configuration = mc_step(initial_configuration)
+        feature_diff = tce_calculator.get_feature_vector_difference(
+            initial_configuration, new_configuration
+        ).reshape(1, -1)
+        energy_diff = transformed_model.predict(feature_diff)
+        energy_diff += energy_modifier(initial_configuration, new_configuration)
+
         if not isinstance(energy_diff, float):
-            raise ValueError(
-                "cluster_expansion.model.predict did not return a float. "
-                "Are you sure this model was trained on energies?"
-            )
-        modified_energy = energy_diff + energy_modifier(state_matrix, new_state_matrix)
-        if np.exp(-beta_values[step] * modified_energy) > 1.0 - generator.random():
-            LOGGER.debug(f"move accepted with energy difference {energy_diff:.3f}")
-            state_matrix = new_state_matrix
+            energy_diff = energy_diff.item()
+        if np.exp(-beta_values[step] * energy_diff) > 1.0 - generator.random():
+            LOGGER.debug(f"move accepted with energy difference {energy_diff}")
+            initial_configuration = new_configuration
             energy += energy_diff
 
     return trajectory

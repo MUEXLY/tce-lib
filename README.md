@@ -23,7 +23,7 @@
 ## 🔎 What is tce-lib?
 
 `tce-lib` is a library for creating and deploying tensor cluster expansion models of concentrated alloys following
-our work on [arXiv](https://arxiv.org/abs/2509.04686). The core philosophy of `tce-lib` is to respect the 
+our work published [here](https://doi.org/10.1016/j.commatsci.2025.114338). The core philosophy of `tce-lib` is to respect the 
 [strategy pattern](https://en.wikipedia.org/wiki/Strategy_pattern) as core to the library's functionality. This design
 pattern stages workflows as sequences of strategies, of which the user can override each. This allows for the majority 
 of users to plug-and-play for an ordinary workflow, while still supporting fine-grained autonomy for more advanced 
@@ -46,7 +46,7 @@ pip install -e tce-lib/
 
 ## 📌 Citation
 
-Please cite our work [here](https://www.sciencedirect.com/science/article/pii/S0927025625006810) if you use `tce-lib` in your work.
+Please cite our work [here](https://doi.org/10.1016/j.commatsci.2025.114338) if you use `tce-lib` in your work.
 
 ## 💙 Acknowledgements
 

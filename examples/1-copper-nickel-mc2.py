@@ -1,49 +1,53 @@
-from pathlib import Path
 import logging
 import sys
 from typing import Callable
 from functools import wraps
+from collections import Counter
 
 import numpy as np
 from numpy.typing import NDArray
 import matplotlib.pyplot as plt
-from ase import build
+from ase import build, Atoms
 
-from tce.training import ClusterExpansion
+from tce.calculator import TCECalculator
 from tce.monte_carlo import monte_carlo, MCStep
 
 
-def one_particle_swap_factory(generator: np.random.Generator) -> MCStep:
+def one_particle_swap_factory(
+    generator: np.random.Generator,
+    atomic_numbers: NDArray[np.int64]
+) -> MCStep:
 
     @wraps(one_particle_swap_factory)
-    def wrapper(state_matrix: NDArray[np.floating]) -> NDArray[np.floating]:
-        num_sites, num_types = state_matrix.shape
-        i, = generator.integers(num_sites, size=1)
-        current_type = np.where(state_matrix[i, :] == 1)[0]
+    def wrapper(atoms: Atoms) -> Atoms:
 
-        new_type = generator.integers(num_types, size=1)
-        while new_type == current_type:
-            new_type = generator.integers(num_types, size=1)
-
-        new_state_matrix = state_matrix.copy()
-        new_state_matrix[i, :] = np.zeros(num_types)
-        new_state_matrix[i, new_type] = 1.0
-        return new_state_matrix
+        new_atoms = atoms.copy()
+        i, = generator.integers(len(atoms), size=1)
+        
+        new_atoms.numbers[i] = generator.choice(atomic_numbers)
+        return new_atoms
 
     return wrapper
 
 
 def energy_modifier_factory(
-    chemical_potentials: NDArray[np.floating]
-) -> Callable[[NDArray[np.floating], NDArray[np.floating]], float]:
+    chemical_potentials: dict[int, float]
+) -> Callable[[Atoms, Atoms], float]:
 
     @wraps(energy_modifier_factory)
     def wrapper(
-        state_matrix: NDArray[np.floating],
-        new_state_matrix: NDArray[np.floating]
+        initial: Atoms,
+        final: Atoms
     ) -> float:
-        change_in_num_types = new_state_matrix.sum(axis=0) - state_matrix.sum(axis=0)
-        return -chemical_potentials @ change_in_num_types
+
+        types_initial = Counter(initial.numbers)
+        types_final = Counter(final.numbers)
+
+        legendre_transform = -sum(
+            mu * (types_final[t] - types_initial[t]) for t, mu in chemical_potentials.items()
+        )
+
+        return legendre_transform
 
     return wrapper
 
@@ -52,30 +56,34 @@ def main():
 
     rng = np.random.default_rng(seed=0)
 
-    cluster_expansion = ClusterExpansion.load(Path("CuNi.pkl"))
+    calculator = TCECalculator.load("copper_nickel_tce.pkl")
 
-    chemical_potentials_cu = np.linspace(-0.5, 1.5, 25)
+    chemical_potentials_cu = np.linspace(0.5, 1.2, 25)
     atomic_fractions_cu = np.zeros_like(chemical_potentials_cu)
 
     pure_ni = build.bulk(
-        cluster_expansion.type_map[1],
-        a=cluster_expansion.cluster_basis.lattice_parameter,
-        crystalstructure=cluster_expansion.cluster_basis.lattice_structure.name.lower(),
+        "Ni",
+        a=3.6,
+        crystalstructure="fcc",
         cubic=True
     ).repeat((10, 10, 10))
+    pure_ni.symbols = rng.choice(["Cu", "Ni"], size=len(pure_ni))
 
     for i, chemical_potential_cu in enumerate(chemical_potentials_cu):
 
         trajectory = monte_carlo(
             initial_configuration=pure_ni,
-            cluster_expansion=cluster_expansion,
+            tce_calculator=calculator,
             num_steps=10_000,
             beta=19.341,
             save_every=1_000,
             energy_modifier=energy_modifier_factory(
-                chemical_potentials=np.array([chemical_potential_cu, 0.0])
+                chemical_potentials={29: chemical_potential_cu, 28: 0.0}
             ),
-            mc_step=one_particle_swap_factory(generator=rng),
+            mc_step=one_particle_swap_factory(
+                generator=rng, 
+                atomic_numbers=np.array([28, 29])
+            ),
             callback=lambda x, y: None
         )
         final_types = np.array(trajectory[-1].get_chemical_symbols())

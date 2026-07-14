@@ -13,7 +13,6 @@ import warnings
 from ase import Atoms, io
 from aenum import Enum
 
-from tce.constants import LatticeStructure
 from tce.training import get_type_map
 
 
@@ -61,7 +60,7 @@ class Dataset:
     """
 
     lattice_parameter: float
-    lattice_structure: LatticeStructure
+    lattice_structure: str
     description: str
     contact_info: str
     configurations: list[Atoms]
@@ -89,8 +88,6 @@ class Dataset:
 
             with (dataset_dir / directory / "metadata.json").open("r") as file:
                 metadata = json.load(file)
-
-            metadata["lattice_structure"] = getattr(LatticeStructure, metadata["lattice_structure"].upper())
             
             configurations = []
             for path in (dataset_dir / directory).glob("*.xyz"):
@@ -115,8 +112,6 @@ class Dataset:
 
             with (dataset_dir / directory / "metadata.json").open("r") as file:
                 metadata = json.load(file)
-
-            metadata["lattice_structure"] = getattr(LatticeStructure, metadata["lattice_structure"].upper())
 
             configurations = []
             for path in (dataset_dir / directory).glob("*.xyz"):

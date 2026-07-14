@@ -35,7 +35,8 @@ dependencies = [
     "scipy>=1.6.0, <1.16.0",
     "opt-einsum>=3.0.1, <4.0",
     "ase>=3.10.0, <3.26.0",
-    "aenum>=3.0.0, <3.1.17"
+    "aenum>=3.0.0, <3.1.17",
+    "multiset==3.2.0"
 ]
 
 [project.urls]
@@ -57,7 +58,7 @@ examples = [
     "scikit-learn~=1.7.1",
     "requests~=2.32.5",
     "ovito~=3.13.1",
-    "cowley-sro-parameters~=1.1.1"
+    "cowley-sro-parameters~=2.0.0"
 ]
 
 [tool.hatch.version]

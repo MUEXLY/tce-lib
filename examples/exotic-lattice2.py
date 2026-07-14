@@ -1,8 +1,7 @@
 from ase import build
 import numpy as np
 
-from tce.constants import LatticeStructure, register_new_lattice_structure, ClusterBasis
-from tce.topology import topological_feature_vector_factory
+from tce.calculator import TCECalculator
 
 
 def main():
@@ -16,39 +15,36 @@ def main():
         if not any(np.isclose(x, u, atol=1.0e-3) for u in unique_tol):
             unique_tol.append(x)
 
-    unique_tol = np.sort(unique_tol)
-    unique_tol = unique_tol[unique_tol < 1.1]
-
-    register_new_lattice_structure(
-        name="FLUORITE",
-        atomic_basis=fluorite_unit_cell.positions,
-        cutoff_list=unique_tol
-    )
+    unique_tol = np.sort(unique_tol)[1:]
 
     lattice_parameter = 5.6
+    cutoffs = unique_tol[:3] * lattice_parameter
+
     atoms = build.bulk(
         "UO2",
         crystalstructure="fluorite",
         a=lattice_parameter,
         cubic=True
     ).repeat((3, 3, 3))
-    cations = np.array(["U", "Th"])
+    cations = ["U", "Th"]
     rng = np.random.default_rng(seed=0)
     for i, symbol in enumerate(atoms.get_chemical_symbols()):
         if symbol == "O":
             continue
         atoms[i].symbol = rng.choice(cations)
 
-    feature_vector_computer = topological_feature_vector_factory(
-        basis=ClusterBasis(
-            LatticeStructure.FLUORITE,
-            lattice_parameter=lattice_parameter,
-            max_adjacency_order=3,
-            max_triplet_order=1
-        ),
-        type_map=np.append(cations, "O"),
+    species = cations + ["O"]
+
+    calculator = TCECalculator(
+        neighbor_cutoffs=cutoffs,
+        many_body_features=[
+            (0, 0, 1),
+            (0, 0, 2)
+        ],
+        species=species
     )
-    feature_vector = feature_vector_computer(atoms)
+
+    feature_vector = calculator.get_feature_vector(atoms)
     print(feature_vector)
 
 

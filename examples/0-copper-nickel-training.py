@@ -1,5 +1,4 @@
 from pathlib import Path
-import pickle
 
 from ase import build
 from ase.calculators.eam import EAM
@@ -82,8 +81,7 @@ def main():
     plt.plot(gca.get_xlim(), gca.get_xlim(), ls="--", color="black")
     plt.savefig("parity-plot.png", dpi=800, bbox_inches="tight")
 
-    with open("copper_nickel_tce.pkl", "wb") as file:
-        pickle.dump(calc, file)
+    calc.save("copper_nickel_tce.pkl")
 
 
 if __name__ == "__main__":

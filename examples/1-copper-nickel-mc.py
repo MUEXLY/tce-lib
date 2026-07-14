@@ -1,11 +1,11 @@
 from pathlib import Path
 import logging
 import sys
-import pickle
 
 import numpy as np
 from ase import io, build
 
+from tce.calculator import TCECalculator
 from tce.monte_carlo import monte_carlo
 
 
@@ -13,8 +13,7 @@ def main():
 
     rng = np.random.default_rng(seed=0)
 
-    with open("copper_nickel_tce.pkl", "rb") as f:
-        calculator = pickle.load(f)
+    calculator = TCECalculator.load("copper_nickel_tce.pkl")
 
     atoms = build.bulk(
         "Cu",

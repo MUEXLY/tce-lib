@@ -19,7 +19,7 @@ def main():
 
     sro_parameters = [data.attributes["sro_CuNi"] for data in pipeline.frames]
 
-    # sort by number in filename, lexographical sorting done by Path.glob does not work
+    # sort by the number in filename, lexographical sorting done by Path.glob does not work
     paths = list(Path("copper-nickel").glob("frame_*.xyz"))
     paths.sort(key=lambda path: int(path.stem.split("_")[1]))
     energies = [energy_per_atom(io.read(p)) for p in paths]

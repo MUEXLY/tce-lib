@@ -2,7 +2,6 @@ import logging
 import sys
 from typing import Callable
 from functools import wraps
-import pickle
 from collections import Counter
 
 import numpy as np
@@ -10,6 +9,7 @@ from numpy.typing import NDArray
 import matplotlib.pyplot as plt
 from ase import build, Atoms
 
+from tce.calculator import TCECalculator
 from tce.monte_carlo import monte_carlo, MCStep
 
 
@@ -56,8 +56,7 @@ def main():
 
     rng = np.random.default_rng(seed=0)
 
-    with open("copper_nickel_tce.pkl", "rb") as f:
-        calculator = pickle.load(f)
+    calculator = TCECalculator.load("copper_nickel_tce.pkl")
 
     chemical_potentials_cu = np.linspace(0.5, 1.2, 25)
     atomic_fractions_cu = np.zeros_like(chemical_potentials_cu)

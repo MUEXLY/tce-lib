@@ -1,10 +1,10 @@
 import os
-import pickle
 
 import numpy as np
 import requests
 from ase import build
 
+from tce.calculator import TCECalculator
 from tce.monte_carlo import monte_carlo
 
 
@@ -26,8 +26,7 @@ def main():
 
     rng = np.random.default_rng(seed=0)
 
-    with open("copper_nickel_tce.pkl", "rb") as file:
-        calc = pickle.load(file)
+    calc = TCECalculator.load("copper_nickel_tce.pkl")
 
     atoms = build.bulk(
         "Cu",

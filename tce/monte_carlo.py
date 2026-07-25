@@ -4,7 +4,7 @@ model.
 """
 
 
-from typing import Optional, Callable, TypeAlias, Sequence
+from typing import Iterator, Optional, Callable, TypeAlias, Sequence
 import logging
 import warnings
 
@@ -149,8 +149,9 @@ def monte_carlo(
     generator: Optional[np.random.Generator] = None,
     mc_step: Optional[Callable[[Atoms], Atoms]] = None,
     energy_modifier: Optional[Callable[[Atoms, Atoms], float]] = None,
-    callback: Optional[Callable[[int, int], None]] = None
-) -> list[Atoms]:
+    callback: Optional[Callable[[int, int], None]] = None,
+    return_generator: bool = False
+) -> list[Atoms] | Iterator[Atoms]:
 
     r"""
     New Monte Carlo simulation function that uses the `transform_model` function to transform the model to predict
@@ -191,6 +192,15 @@ def monte_carlo(
             MC, and will simply use the energy as the thermodynamic potential. See the grand canonical MC example 
             [here](https://github.com/MUEXLY/tce-lib/blob/main/examples/1-copper-nickel-mc2.py) for how to use this 
             argument to change the ensemble sampled.
+
+        callback (Callable[[int, int], None]):
+            Callback function to call at each step. If not specified, the function will log the current step 
+            number and total number of steps. 
+
+        return_generator (bool): 
+            If `True`, the function will return a generator so that simulation frames can be computed lazily within
+            an iteration loop. This is useful for the analysis of very long simulations, such as those executed on HPC clusters.
+            Defaults to `False` for backwards compatibility.
     """
 
     if not generator:
@@ -239,29 +249,34 @@ def monte_carlo(
     )
     if isinstance(energy, np.ndarray):
         energy = energy.item()
+
+    def _generating_fn(initial_configuration: Atoms, energy: float) -> Atoms: 
+        """Wrap the generator logic in a function so that we can return both outpt types."""
+
+        for step in range(num_steps):
+            callback(step, num_steps)
+
+            if not step % save_every:
+                to_save = initial_configuration.copy()
+                to_save.info["energy"] = energy
+                yield to_save
+                LOGGER.info(f"saved configuration at step {step:.0f}/{num_steps:.0f}")
+
+            new_configuration = mc_step(initial_configuration)
+            feature_diff = tce_calculator.get_feature_vector_difference(
+                initial_configuration, new_configuration
+            ).reshape(1, -1)
+            energy_diff = transformed_model.predict(feature_diff)
+            energy_diff += energy_modifier(initial_configuration, new_configuration)
+
+            if not isinstance(energy_diff, float):
+                energy_diff = energy_diff.item()
+            if np.exp(-beta_values[step] * energy_diff) > 1.0 - generator.random():
+                LOGGER.debug(f"move accepted with energy difference {energy_diff}")
+                initial_configuration = new_configuration
+                energy += energy_diff
+
+    if return_generator: 
+        return _generating_fn(initial_configuration, energy)
     
-    trajectory = []
-    for step in range(num_steps):
-        callback(step, num_steps)
-
-        if not step % save_every:
-            to_save = initial_configuration.copy()
-            to_save.info["energy"] = energy
-            trajectory.append(to_save)
-            LOGGER.info(f"saved configuration at step {step:.0f}/{num_steps:.0f}")
-
-        new_configuration = mc_step(initial_configuration)
-        feature_diff = tce_calculator.get_feature_vector_difference(
-            initial_configuration, new_configuration
-        ).reshape(1, -1)
-        energy_diff = transformed_model.predict(feature_diff)
-        energy_diff += energy_modifier(initial_configuration, new_configuration)
-
-        if not isinstance(energy_diff, float):
-            energy_diff = energy_diff.item()
-        if np.exp(-beta_values[step] * energy_diff) > 1.0 - generator.random():
-            LOGGER.debug(f"move accepted with energy difference {energy_diff}")
-            initial_configuration = new_configuration
-            energy += energy_diff
-
-    return trajectory
+    return list(_generating_fn(initial_configuration, energy))

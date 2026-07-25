@@ -1,4 +1,5 @@
 from typing import Callable
+from types import GeneratorType
 from tempfile import TemporaryDirectory
 from pathlib import Path
 import pickle
@@ -591,3 +592,55 @@ def test_energy_diff_transform(model):
     feature_diff = second_feature_vector - first_feature_vector
     energy_diff_from_delta = calc.models["energy"].predict(feature_diff.reshape(1, -1)).squeeze()
     assert np.isclose(energy_diff, energy_diff_from_delta), f"{energy_diff}, {energy_diff_from_delta}"
+
+def test_monte_carlo_generator(): 
+    """Test if the list and generator return the same results"""
+
+    rng = np.random.default_rng(seed=0)
+    fe_cohesive_energy = 4.0
+    cr_cohesive_energy = 3.0
+
+    pure_fe = build.bulk("Fe", crystalstructure="bcc", a=3.0, cubic=True).repeat((5, 5, 5))
+    pure_fe.calc = SinglePointCalculator(pure_fe, energy=len(pure_fe) * -fe_cohesive_energy)
+    pure_cr = build.bulk("Cr", crystalstructure="bcc", a=3.0, cubic=True).repeat((5, 5, 5))
+    pure_cr.calc = SinglePointCalculator(pure_cr, energy=len(pure_cr) * -cr_cohesive_energy)
+    mixture = pure_fe.copy()
+    mixture.symbols = rng.choice(["Fe", "Cr"], size=len(mixture))
+    mixture.calc = SinglePointCalculator(
+        mixture,
+        energy=len(mixture) * -0.5 * (fe_cohesive_energy + cr_cohesive_energy)
+    )
+
+    calc = TCECalculator(
+        neighbor_cutoffs=CUTOFFS["bcc"][:2] * 3.0,
+        many_body_features=[(0, 0, 1)],
+        species=["Fe", "Cr"],
+        models={"energy": RidgeCV(fit_intercept=False)}
+    ).train([pure_fe, pure_cr, mixture])
+
+    new_mixture = pure_fe.copy()
+    new_mixture.symbols = rng.choice(["Fe", "Cr"], size=len(new_mixture))
+    new_mixture.calc = calc
+
+    num_steps = 10
+    beta = 11.1
+
+    list_results = monte_carlo(
+        initial_configuration=new_mixture,
+        tce_calculator=calc,
+        num_steps=num_steps,
+        beta=beta,
+        return_generator=False
+    )
+
+    generator_results = monte_carlo(
+        initial_configuration=new_mixture,
+        tce_calculator=calc,
+        num_steps=num_steps,
+        beta=beta,
+        return_generator=True
+    )
+
+    assert isinstance(list_results, list)
+    assert isinstance(generator_results, GeneratorType)  # check if generator
+    assert list_results == list(generator_results)

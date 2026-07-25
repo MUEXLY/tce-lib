@@ -4,7 +4,7 @@ model.
 """
 
 
-from typing import Iterator, Optional, Callable, TypeAlias, Sequence
+from typing import Generator, Iterator, Optional, Callable, TypeAlias, Sequence
 import logging
 import warnings
 
@@ -250,8 +250,8 @@ def monte_carlo(
     if isinstance(energy, np.ndarray):
         energy = energy.item()
 
-    def _generating_fn(initial_configuration: Atoms, energy: float) -> Atoms: 
-        """Wrap the generator logic in a function so that we can return both outpt types."""
+    def _generating_fn(initial_configuration: Atoms, energy: float) -> Generator[Atoms, None, None]: 
+        """Wrap the generator logic in a function so that we can return both output types."""
 
         for step in range(num_steps):
             callback(step, num_steps)

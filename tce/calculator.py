@@ -19,13 +19,13 @@ from ase.data import atomic_numbers
 import numpy as np
 from numpy.typing import NDArray
 import sparse
-from scipy.spatial import KDTree
 from opt_einsum import contract
 from multiset import Multiset
 
 from .training import Model, LimitingRidge
 from .topology import hash_topology, symmetrize
 from .topology import get_adjacency_tensors
+from .citations import cite, ORIGINAL_PAPER, KMC_PAPER
 
 
 LOGGER = logging.getLogger(__name__)
@@ -342,15 +342,10 @@ class TCECalculator(Calculator):
         topological_tensors = self.topological_tensors.get(topology_key)
 
         if topological_tensors is None:
-            
-            if not np.all(atoms.cell.angles() == 90):
-                raise ValueError("supercells must be orthogonal (for now)")
-
-            tree = KDTree(data=atoms.positions, boxsize=np.diag(atoms.cell))
 
             # these are boolean, so we can sum corresponding to logical or
             adjacency_tensors = get_adjacency_tensors(
-                tree=tree,
+                atoms=atoms,
                 cutoffs=self.neighbor_cutoffs,
                 tolerance=self.neighbor_tolerance
             )
@@ -396,6 +391,7 @@ class TCECalculator(Calculator):
         return topological_tensors
 
 
+    @cite(paper_link=ORIGINAL_PAPER)
     def get_feature_vector(
         self,
         atoms: Atoms
@@ -616,6 +612,7 @@ class TCECalculator(Calculator):
         return total_feature_diff
 
 
+    @cite(paper_link=ORIGINAL_PAPER)
     def get_feature_vector_difference(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
 
         r"""
@@ -703,6 +700,7 @@ class TCECalculator(Calculator):
         return self
 
 
+    @cite(paper_link=KMC_PAPER)
     def difference_train(self, configuration_pairs: list[tuple[Atoms, Atoms]]):
 
         r"""

@@ -31,6 +31,14 @@ def get_supercell() -> Callable[[], Atoms]:
 
     def supercell(lattice_structure: str) -> Atoms:
 
+        if lattice_structure == "graphene":
+            return build.graphene(
+                formula="X2",
+                a=1.0,
+                size=(4, 4, 4),
+                vacuum=20.0
+            )
+
         size = None
         if lattice_structure == "sc":
             size = (5, 5, 5)
@@ -56,7 +64,8 @@ def get_supercell() -> Callable[[], Atoms]:
     [
         ("sc", 6),
         ("bcc", 8),
-        ("fcc", 12)
+        ("fcc", 12),
+        ("graphene", 3)
     ]
 )
 def test_num_neighbors(lattice_structure: str, num_expected_neighbors: int, get_supercell):
@@ -125,7 +134,7 @@ def test_noncubic_cell_raises_value_error():
         build.bulk("Cr", crystalstructure="bcc", a=2.7, cubic=False).repeat((3, 3, 3))
     ]
     for configuration in configurations:
-        configuration.info["energy"] = -1.0
+        configuration.calc = SinglePointCalculator(atoms=configuration, energy=-1.0)
 
     calc = TCECalculator(
         neighbor_cutoffs=[0.5 * np.sqrt(3.0) * 2.7],
@@ -133,8 +142,7 @@ def test_noncubic_cell_raises_value_error():
         species=["Fe", "Cr"]
     )
 
-    with pytest.raises(ValueError):
-       calc.train(configurations)
+    calc.train(configurations)
 
 
 def test_no_energy_computation_raises_attribute_error():

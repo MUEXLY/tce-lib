@@ -7,11 +7,11 @@ from typing import Optional, Union
 import hashlib
 import logging
 
-from scipy.spatial import KDTree
 import numpy as np
 from numpy.typing import NDArray
 import sparse
 from ase import Atoms
+from ase.neighborlist import neighbor_list
 
 
 LOGGER = logging.getLogger(__name__)
@@ -45,19 +45,19 @@ def symmetrize(tensor: sparse.COO, axes: Optional[tuple[int, ...]] =None) -> spa
 
 
 def get_adjacency_tensors(
-    tree: KDTree,
+    atoms: Atoms,
     cutoffs: Union[list[float], NDArray[np.floating]],
     tolerance: float = 0.01
 ) -> sparse.COO:
 
     r"""
-    compute adjacency tensors $A_{ij}^{(n)}$. we first compute the sparse distance matrix using the
-    `scipy.spatial.KDTree` data structure, and then convert to a `sparse.COO` tensor. then we stack the tensors
-    according to neighbor order, i.e., $A_{ij}^{(n)} = 1$ if sites $i$ and $j$ are $n$th order neighbors, and $0$ else.
+    compute adjacency tensors $A_{ij}^{(n)}$. we first compute the sparse distance matrix as a `sparse.COO` tensor. 
+    then we stack the tensors according to neighbor order, i.e., $A_{ij}^{(n)} = 1$ if sites $i$ and $j$ are $n$th order 
+    neighbors, and $0$ else.
 
     Args:
-        tree (scipy.spatial.KDTree):
-            The KDTree to compute adjacency tensors from. this structure stores lattice positions as well as lattice
+        atoms (ase.Atoms):
+            The atoms to compute adjacency tensors from. this structure stores lattice positions as well as lattice
             vectors to encode periodic boundary conditions.
         cutoffs (Union[list[float], NDArray[np.floating]]):
             Distance cutoffs for interatomic distances.
@@ -67,9 +67,15 @@ def get_adjacency_tensors(
             should be a small number. defaults to $0.01$.
     """
 
-    distances = tree.sparse_distance_matrix(tree, max_distance=(1.0 + tolerance) * cutoffs[-1]).tocsr()
-    distances.eliminate_zeros()
-    distances_sp = sparse.COO.from_scipy_sparse(distances)
+    i, j, d = neighbor_list("ijd", atoms, cutoff=(1.0 + tolerance) * cutoffs[-1])
+
+    distances_sp = sparse.COO(
+        np.vstack((i, j)),
+        d,
+        shape=(len(atoms), len(atoms)),
+        fill_value=0.0,
+        has_duplicates=False
+    )
 
     return sparse.stack([
         sparse.where(

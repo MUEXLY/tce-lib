@@ -459,6 +459,7 @@ from . import datasets as datasets
 from . import monte_carlo as monte_carlo
 from . import topology as topology
 from . import training as training
+from . import citations as citations
 
 
 if __version__.startswith("0."):

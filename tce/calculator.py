@@ -452,7 +452,11 @@ class TCECalculator(Calculator):
 
         $$ N_{\alpha_1\cdots\alpha_m s}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{n=1}^m X_{i_n\alpha_n s} $$
 
-        where $s$ indexes configurations. i.e., the function computes the cluster counts in a list of configurations, 
+        where $s$ indexes configurations, and the new indicator tensor $\mathbf{X}$ is:
+        
+        $$ X_{i\alpha s} = [\text{site $i$ in sample $s$ is occupied by type $\alpha$}] $$
+        
+        i.e., the function computes the cluster counts in a list of configurations, 
         rather than for just one. Alternatively, the two calls are equivalent:
 
         ```py
@@ -482,7 +486,7 @@ class TCECalculator(Calculator):
         # eg Lij,iα,jβ->Lαβ needs to become Lij,Siα,Sjβ->LSαβ, where S denotes a sample
         batch_einsum_strs = {}
         for body_order, einsum_str in self.einsum_strs.items():
-            
+
             input_indices, output_indices = einsum_str.split("->")
             input_indices = input_indices.replace(",", ",S")
             output_indices = output_indices.replace("L", "LS")

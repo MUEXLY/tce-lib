@@ -652,3 +652,54 @@ def test_monte_carlo_generator():
     assert isinstance(list_results, list)
     assert isinstance(generator_results, GeneratorType)  # check if generator
     assert list_results == list(generator_results)
+
+
+def test_batched_feature_calculation():
+
+    pure_w = build.bulk("W", cubic=True).repeat((3, 3, 3))
+    a = np.cbrt(build.bulk("W", cubic=True).get_volume())
+
+    calc = TCECalculator(
+        neighbor_cutoffs=[
+            0.5 * np.sqrt(3.0) * a, a
+        ],
+        many_body_features=[
+            (0, 0, 1)
+        ],
+        species=["W", "Ta"]
+    )
+    
+    rng = np.random.default_rng(seed=0)
+    samples = []
+    for _ in range(30):
+        alloy = pure_w.copy()
+        alloy.symbols = rng.choice(["Ta", "W"], size=len(alloy))
+        samples.append(alloy)
+    
+    X_batched = calc.get_batched_feature_vectors(samples)
+
+    X = np.zeros((len(samples), calc.feature_vector_size))
+    for i, sample in enumerate(samples):
+        X[i, :] = calc.get_feature_vector(sample)
+
+    assert np.all(np.isclose(X, X_batched))
+
+
+def test_batched_calculation_throws_error_on_size_mismatch():
+
+    pure_w = build.bulk("W", cubic=True).repeat((3, 3, 3))
+    pure_w_larger = pure_w.repeat((2, 1, 1))
+    a = np.cbrt(build.bulk("W", cubic=True).get_volume())
+
+    calc = TCECalculator(
+        neighbor_cutoffs=[
+            0.5 * np.sqrt(3.0) * a, a
+        ],
+        many_body_features=[
+            (0, 0, 1)
+        ],
+        species=["W"]
+    )
+    
+    with pytest.raises(ValueError):
+        calc.get_batched_feature_vectors(atoms_list=[pure_w, pure_w_larger])

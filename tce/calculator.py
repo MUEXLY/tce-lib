@@ -435,6 +435,92 @@ class TCECalculator(Calculator):
         return feature_vec
 
 
+    @cite(paper_link=ORIGINAL_PAPER)
+    def get_batched_feature_vectors(
+        self,
+        atoms_list: list[Atoms]
+    ) -> NDArray[np.floating]:
+
+        r"""
+        Compute batched feature vectors for many structures.
+
+        This function is quite similar to `TCECalculator.get_feature_vector`, but replaces the contractions:
+
+        $$ N_{\alpha_1\cdots\alpha_m}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{n=1}^m X_{i_n\alpha_n} $$
+
+        with a batched contraction instead:
+
+        $$ N_{\alpha_1\cdots\alpha_m s}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{n=1}^m X_{i_n\alpha_n s} $$
+
+        where $s$ indexes configurations. i.e., the function computes the cluster counts in a list of configurations, 
+        rather than for just one. Alternatively, the two calls are equivalent:
+
+        ```py
+        configurations: list[Atoms] = ...
+        calc: TCECalculator = ...
+
+        feature_matrix = np.array([
+            calc.get_feature_vector(atoms) for atoms in configurations
+        ])
+        feature_matrix = calc.get_batched_feature_vectors(configurations)
+        ```
+
+        Args:
+            atoms_list (list[Atoms]):
+                The list of configurations to compute feature vectors for. Every system must have the same geometry 
+                and topology.
+        """
+
+        topology_hashes = {hash_topology(atoms) for atoms in atoms_list}
+        if len(topology_hashes) != 1:
+            raise ValueError("For the batched calculation, every sample must have the same geometry and topology.")
+
+        num_sites = len(atoms_list[0])
+        topological_tensors = self.get_topological_tensors(atoms_list[0])
+
+        # first modify einsum string to have a sample index
+        # eg Lij,iα,jβ->Lαβ needs to become Lij,Siα,Sjβ->LSαβ, where S denotes a sample
+        batch_einsum_strs = {}
+        for body_order, einsum_str in self.einsum_strs.items():
+            
+            input_indices, output_indices = einsum_str.split("->")
+            input_indices = input_indices.replace(",", ",S")
+            output_indices = output_indices.replace("L", "LS")
+
+            batch_einsum_strs[body_order] = f"{input_indices}->{output_indices}"
+
+        indicator_tensors = np.zeros(
+            (len(atoms_list), num_sites, len(self.species)),
+            dtype=float
+        )
+
+        for i, atoms in enumerate(atoms_list):
+            indicator_tensors[i, :, :] = (
+                atoms.numbers[:, None] == self.atomic_numbers[None, :]
+            ).astype(float)
+
+        feature_matrix = np.zeros((len(atoms_list), self.feature_vector_size), dtype=np.float64)
+        pos = 0
+
+        for body_order, t in topological_tensors.items():
+
+            einsum_str = batch_einsum_strs[body_order]
+            cluster_counts = contract(
+                einsum_str,
+                t,
+                *repeat(indicator_tensors, body_order)
+            )
+            cluster_counts = np.moveaxis(cluster_counts, 1, 0)
+
+            # Now flatten each sample the same way the single-structure version does
+            flattened = cluster_counts.reshape(len(atoms_list), -1)
+
+            feature_matrix[:, pos:pos + flattened.shape[1]] = flattened
+            pos += flattened.shape[1]
+
+        return feature_matrix
+
+
     def _get_feature_vector_difference_for_sites(
         self,
         initial: Atoms,

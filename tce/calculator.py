@@ -413,7 +413,6 @@ class TCECalculator(Calculator):
 
         topological_tensors = self.get_topological_tensors(atoms)
 
-        #symbols = np.array(atoms.get_chemical_symbols())
         indicator_tensor = atoms.numbers[:, None] == self.atomic_numbers[None, :]
         indicator_tensor = indicator_tensor.astype(float)
 
@@ -435,6 +434,29 @@ class TCECalculator(Calculator):
         return feature_vec
 
 
+    def get_normalizer(
+        self,
+        atoms: Atoms
+    ) -> NDArray[np.floating]:
+
+        topological_tensors = self.get_topological_tensors(atoms)
+
+        indicator_tensor = atoms.numbers[:, None] == self.atomic_numbers[None, :]
+        indicator_tensor = indicator_tensor.astype(float)
+
+        # Pre-allocate feature vector
+        normalizer = np.zeros(self.feature_vector_size, dtype=np.float64)
+        pos = 0
+        
+        for body_order, t in topological_tensors.items():
+
+            num_features = len(self.species) ** body_order * t.shape[0]
+            normalizer[pos:pos+num_features] = t.sum()
+            pos += num_features
+
+        return normalizer
+
+
     @cite(paper_link=ORIGINAL_PAPER)
     def get_batched_feature_vectors(
         self,
@@ -450,11 +472,11 @@ class TCECalculator(Calculator):
 
         with a batched contraction instead:
 
-        $$ N_{\alpha_1\cdots\alpha_m s}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{n=1}^m X_{i_n\alpha_n s} $$
+        $$ N_{S\alpha_1\cdots\alpha_m}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{n=1}^m X_{Si_n\alpha_n} $$
 
-        where $s$ indexes configurations, and the new indicator tensor $\mathbf{X}$ is:
+        where $S$ indexes configurations, and the new indicator tensor $\mathbf{X}$ is:
         
-        $$ X_{i\alpha s} = [\text{site $i$ in sample $s$ is occupied by type $\alpha$}] $$
+        $$ X_{Si\alpha} = [\text{site $i$ in sample $S$ is occupied by type $\alpha$}] $$
         
         i.e., the function computes the cluster counts in a list of configurations, 
         rather than for just one. Alternatively, the two calls are equivalent:
@@ -730,6 +752,7 @@ class TCECalculator(Calculator):
 
         raise NotImplementedError
 
+
     def calculate(
         self,
         atoms: Optional[Atoms] = None,
@@ -839,6 +862,7 @@ class TCECalculator(Calculator):
                 self.models[name].fit(feature_matrix, target)
 
         return self
+
 
     def save(self, path: Union[Path, str]):
 

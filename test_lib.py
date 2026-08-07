@@ -31,6 +31,14 @@ def get_supercell() -> Callable[[], Atoms]:
 
     def supercell(lattice_structure: str) -> Atoms:
 
+        if lattice_structure == "graphene":
+            return build.graphene(
+                formula="X2",
+                a=1.0,
+                size=(4, 4, 4),
+                vacuum=20.0
+            )
+
         size = None
         if lattice_structure == "sc":
             size = (5, 5, 5)
@@ -56,7 +64,8 @@ def get_supercell() -> Callable[[], Atoms]:
     [
         ("sc", 6),
         ("bcc", 8),
-        ("fcc", 12)
+        ("fcc", 12),
+        ("graphene", 3)
     ]
 )
 def test_num_neighbors(lattice_structure: str, num_expected_neighbors: int, get_supercell):
@@ -125,7 +134,7 @@ def test_noncubic_cell_raises_value_error():
         build.bulk("Cr", crystalstructure="bcc", a=2.7, cubic=False).repeat((3, 3, 3))
     ]
     for configuration in configurations:
-        configuration.info["energy"] = -1.0
+        configuration.calc = SinglePointCalculator(atoms=configuration, energy=-1.0)
 
     calc = TCECalculator(
         neighbor_cutoffs=[0.5 * np.sqrt(3.0) * 2.7],
@@ -133,8 +142,7 @@ def test_noncubic_cell_raises_value_error():
         species=["Fe", "Cr"]
     )
 
-    with pytest.raises(ValueError):
-       calc.train(configurations)
+    calc.train(configurations)
 
 
 def test_no_energy_computation_raises_attribute_error():
@@ -644,3 +652,54 @@ def test_monte_carlo_generator():
     assert isinstance(list_results, list)
     assert isinstance(generator_results, GeneratorType)  # check if generator
     assert list_results == list(generator_results)
+
+
+def test_batched_feature_calculation():
+
+    pure_w = build.bulk("W", cubic=True).repeat((3, 3, 3))
+    a = np.cbrt(build.bulk("W", cubic=True).get_volume())
+
+    calc = TCECalculator(
+        neighbor_cutoffs=[
+            0.5 * np.sqrt(3.0) * a, a
+        ],
+        many_body_features=[
+            (0, 0, 1)
+        ],
+        species=["W", "Ta"]
+    )
+    
+    rng = np.random.default_rng(seed=0)
+    samples = []
+    for _ in range(30):
+        alloy = pure_w.copy()
+        alloy.symbols = rng.choice(["Ta", "W"], size=len(alloy))
+        samples.append(alloy)
+    
+    X_batched = calc.get_batched_feature_vectors(samples)
+
+    X = np.zeros((len(samples), calc.feature_vector_size))
+    for i, sample in enumerate(samples):
+        X[i, :] = calc.get_feature_vector(sample)
+
+    assert np.all(np.isclose(X, X_batched))
+
+
+def test_batched_calculation_throws_error_on_size_mismatch():
+
+    pure_w = build.bulk("W", cubic=True).repeat((3, 3, 3))
+    pure_w_larger = pure_w.repeat((2, 1, 1))
+    a = np.cbrt(build.bulk("W", cubic=True).get_volume())
+
+    calc = TCECalculator(
+        neighbor_cutoffs=[
+            0.5 * np.sqrt(3.0) * a, a
+        ],
+        many_body_features=[
+            (0, 0, 1)
+        ],
+        species=["W"]
+    )
+    
+    with pytest.raises(ValueError):
+        calc.get_batched_feature_vectors(atoms_list=[pure_w, pure_w_larger])

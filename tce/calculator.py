@@ -19,13 +19,13 @@ from ase.data import atomic_numbers
 import numpy as np
 from numpy.typing import NDArray
 import sparse
-from scipy.spatial import KDTree
 from opt_einsum import contract
 from multiset import Multiset
 
 from .training import Model, LimitingRidge
 from .topology import hash_topology, symmetrize
 from .topology import get_adjacency_tensors
+from .citations import cite, ORIGINAL_PAPER, KMC_PAPER
 
 
 LOGGER = logging.getLogger(__name__)
@@ -342,15 +342,10 @@ class TCECalculator(Calculator):
         topological_tensors = self.topological_tensors.get(topology_key)
 
         if topological_tensors is None:
-            
-            if not np.all(atoms.cell.angles() == 90):
-                raise ValueError("supercells must be orthogonal (for now)")
-
-            tree = KDTree(data=atoms.positions, boxsize=np.diag(atoms.cell))
 
             # these are boolean, so we can sum corresponding to logical or
             adjacency_tensors = get_adjacency_tensors(
-                tree=tree,
+                atoms=atoms,
                 cutoffs=self.neighbor_cutoffs,
                 tolerance=self.neighbor_tolerance
             )
@@ -396,6 +391,7 @@ class TCECalculator(Calculator):
         return topological_tensors
 
 
+    @cite(paper_link=ORIGINAL_PAPER)
     def get_feature_vector(
         self,
         atoms: Atoms
@@ -417,7 +413,6 @@ class TCECalculator(Calculator):
 
         topological_tensors = self.get_topological_tensors(atoms)
 
-        #symbols = np.array(atoms.get_chemical_symbols())
         indicator_tensor = atoms.numbers[:, None] == self.atomic_numbers[None, :]
         indicator_tensor = indicator_tensor.astype(float)
 
@@ -437,6 +432,119 @@ class TCECalculator(Calculator):
             pos += len(flattened)
 
         return feature_vec
+
+
+    def get_normalizer(
+        self,
+        atoms: Atoms
+    ) -> NDArray[np.floating]:
+
+        topological_tensors = self.get_topological_tensors(atoms)
+
+        indicator_tensor = atoms.numbers[:, None] == self.atomic_numbers[None, :]
+        indicator_tensor = indicator_tensor.astype(float)
+
+        # Pre-allocate feature vector
+        normalizer = np.zeros(self.feature_vector_size, dtype=np.float64)
+        pos = 0
+        
+        for body_order, t in topological_tensors.items():
+
+            num_features = len(self.species) ** body_order * t.shape[0]
+            normalizer[pos:pos+num_features] = t.sum()
+            pos += num_features
+
+        return normalizer
+
+
+    @cite(paper_link=ORIGINAL_PAPER)
+    def get_batched_feature_vectors(
+        self,
+        atoms_list: list[Atoms]
+    ) -> NDArray[np.floating]:
+
+        r"""
+        Compute batched feature vectors for many structures.
+
+        This function is quite similar to `TCECalculator.get_feature_vector`, but replaces the contractions:
+
+        $$ N_{\alpha_1\cdots\alpha_m}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{n=1}^m X_{i_n\alpha_n} $$
+
+        with a batched contraction instead:
+
+        $$ N_{S\alpha_1\cdots\alpha_m}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{n=1}^m X_{Si_n\alpha_n} $$
+
+        where $S$ indexes configurations, and the new indicator tensor $\mathbf{X}$ is:
+        
+        $$ X_{Si\alpha} = [\text{site $i$ in sample $S$ is occupied by type $\alpha$}] $$
+        
+        i.e., the function computes the cluster counts in a list of configurations, 
+        rather than for just one. Alternatively, the two calls are equivalent:
+
+        ```py
+        configurations: list[Atoms] = ...
+        calc: TCECalculator = ...
+
+        feature_matrix = np.array([
+            calc.get_feature_vector(atoms) for atoms in configurations
+        ])
+        feature_matrix = calc.get_batched_feature_vectors(configurations)
+        ```
+
+        Args:
+            atoms_list (list[Atoms]):
+                The list of configurations to compute feature vectors for. Every system must have the same geometry 
+                and topology.
+        """
+
+        topology_hashes = {hash_topology(atoms) for atoms in atoms_list}
+        if len(topology_hashes) != 1:
+            raise ValueError("For the batched calculation, every sample must have the same geometry and topology.")
+
+        num_sites = len(atoms_list[0])
+        topological_tensors = self.get_topological_tensors(atoms_list[0])
+
+        # first modify einsum string to have a sample index
+        # eg Lij,iα,jβ->Lαβ needs to become Lij,Siα,Sjβ->LSαβ, where S denotes a sample
+        batch_einsum_strs = {}
+        for body_order, einsum_str in self.einsum_strs.items():
+
+            input_indices, output_indices = einsum_str.split("->")
+            input_indices = input_indices.replace(",", ",S")
+            output_indices = output_indices.replace("L", "LS")
+
+            batch_einsum_strs[body_order] = f"{input_indices}->{output_indices}"
+
+        indicator_tensors = np.zeros(
+            (len(atoms_list), num_sites, len(self.species)),
+            dtype=float
+        )
+
+        for i, atoms in enumerate(atoms_list):
+            indicator_tensors[i, :, :] = (
+                atoms.numbers[:, None] == self.atomic_numbers[None, :]
+            ).astype(float)
+
+        feature_matrix = np.zeros((len(atoms_list), self.feature_vector_size), dtype=np.float64)
+        pos = 0
+
+        for body_order, t in topological_tensors.items():
+
+            einsum_str = batch_einsum_strs[body_order]
+            cluster_counts = contract(
+                einsum_str,
+                t,
+                *repeat(indicator_tensors, body_order)
+            )
+            cluster_counts = np.moveaxis(cluster_counts, 1, 0)
+
+            # Now flatten each sample the same way the single-structure version does
+            flattened = cluster_counts.reshape(len(atoms_list), -1)
+
+            feature_matrix[:, pos:pos + flattened.shape[1]] = flattened
+            pos += flattened.shape[1]
+
+        return feature_matrix
 
 
     def _get_feature_vector_difference_for_sites(
@@ -616,6 +724,7 @@ class TCECalculator(Calculator):
         return total_feature_diff
 
 
+    @cite(paper_link=ORIGINAL_PAPER)
     def get_feature_vector_difference(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
 
         r"""
@@ -642,6 +751,7 @@ class TCECalculator(Calculator):
             return self.get_feature_vector_difference_transmutation(initial, final)
 
         raise NotImplementedError
+
 
     def calculate(
         self,
@@ -703,6 +813,7 @@ class TCECalculator(Calculator):
         return self
 
 
+    @cite(paper_link=KMC_PAPER)
     def difference_train(self, configuration_pairs: list[tuple[Atoms, Atoms]]):
 
         r"""
@@ -751,6 +862,7 @@ class TCECalculator(Calculator):
                 self.models[name].fit(feature_matrix, target)
 
         return self
+
 
     def save(self, path: Union[Path, str]):
 

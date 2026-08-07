@@ -342,6 +342,23 @@ You'll notice that a lot of the features are $0$. This is not uncommon for exoti
 all lattice sites are equivalent. This is not a problem - we just likely need to feature reduce later using something
 like PCA, which is relatively easy with an sklearn.pipeline.Pipeline object.
 
+## 🔬 OVITO Plugin
+
+We've implemented a plugin for OVITO Pro that allows you to visualize clusters in your system. This is a very useful tool for 
+debugging your cluster expansion model, and for visualizing the clusters that are being used in your model. You can find 
+the plugin [here](https://github.com/jwjeffr/tce-modifier). This plugin can used within the OVITO Pro software, or within 
+a stand-alone Python script using the OVITO Python API. See the README within that repository for more instructions! The stand-alone 
+Python script is useful for generating images of clusters for use in publications, such as the figure below:
+
+[<img
+    src="https://raw.githubusercontent.com/jwjeffr/tce-modifier/refs/heads/main/examples/ws2-grid/grid.png"
+    width=100%
+    alt="WS2 feature grid"
+    title="WS2"
+/>](https://raw.githubusercontent.com/jwjeffr/tce-modifier/refs/heads/main/examples/ws2-grid/grid.png)
+
+See the example [here](https://github.com/jwjeffr/tce-modifier/tree/main/examples/ws2-grid) for the full script that creates this grid.
+
 # Sharp Edges
 
 `tce-lib` has a couple of sharp edges (or gotcha's) that one needs to look out for.
@@ -440,13 +457,13 @@ $$ f(\Delta\mathbf{t}) = \alpha + \boldsymbol{\beta}^\intercal\Delta\mathbf{t} $
 which is invalid unless $\alpha = 0$. To address this, the Monte Carlo function will remove this intercept by probing
 basis vectors, i.e. by evaluating the intercept and subtracting out that intercept:
 
-$$ f_{\text{new}}(\Delta\mathbf{t}) = f(\Delta\mathbf{t}) - f(\mathbf{I}) $$
+$$ f_{\text{new}}(\Delta\mathbf{t}) = f(\Delta\mathbf{t}) - f(\mathbf{0}) $$
 
 where $\mathbf{I}$ is the identity matrix.
 
 """
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 __authors__ = ["Jacob Jeffries"]
 
 __url__ = "https://github.com/MUEXLY/tce-lib"
@@ -459,6 +476,7 @@ from . import datasets as datasets
 from . import monte_carlo as monte_carlo
 from . import topology as topology
 from . import training as training
+from . import citations as citations
 
 
 if __version__.startswith("0."):

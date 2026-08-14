@@ -307,13 +307,14 @@ class TCECalculator(Calculator):
         for body_order, features in self.feature_groups.items():
             if body_order < 3:
                 continue
-            for feature in features:
+
+            species_iterable = product(range(num_species), repeat=body_order)
+            for feature, species_indices in product(features, species_iterable):
                 topological_label = tuple(sorted(feature))
-                for species_indices in product(range(num_species), repeat=body_order):
-                    species_multiset = tuple(
-                        (self.species[idx] for idx in species_indices)
-                    )
-                    labels.append((topological_label, species_multiset))
+                species_multiset = tuple(
+                    (self.species[idx] for idx in species_indices)
+                )
+                labels.append((topological_label, species_multiset))
 
         return labels
 
@@ -341,52 +342,53 @@ class TCECalculator(Calculator):
         topology_key = hash_topology(atoms)
         topological_tensors = self.topological_tensors.get(topology_key)
 
-        if topological_tensors is None:
+        if topological_tensors is not None:
+            return topological_tensors
 
-            # these are boolean, so we can sum corresponding to logical or
-            adjacency_tensors = get_adjacency_tensors(
-                atoms=atoms,
-                cutoffs=self.neighbor_cutoffs,
-                tolerance=self.neighbor_tolerance
+        # these are boolean, so we can sum corresponding to logical or
+        adjacency_tensors = get_adjacency_tensors(
+            atoms=atoms,
+            cutoffs=self.neighbor_cutoffs,
+            tolerance=self.neighbor_tolerance
+        )
+        topological_tensors = {2: adjacency_tensors}
+
+        for body_order, features in self.feature_groups.items():
+
+            final_result_str = LATIN_ALPHABET[:body_order]
+            input_str = ','.join(
+                f"{i1}{i2}" for i1, i2 in combinations(final_result_str, r=2)
             )
-            topological_tensors = {2: adjacency_tensors}
+            einsum_str = f"{input_str}->{final_result_str}"
 
-            for body_order, features in self.feature_groups.items():
-                
-                final_result_str = LATIN_ALPHABET[:body_order]
-                input_str = ','.join(
-                    f"{i1}{i2}" for i1, i2 in combinations(final_result_str, r=2)
+            n_body_tensors = []
+            for label in features:
+                n_body_tensor = sum(
+                    contract(
+                        einsum_str,
+                        *(adjacency_tensors[letter] for letter in permuted_label)
+                    ) for permuted_label in set(permutations(label))
                 )
-                einsum_str = f"{input_str}->{final_result_str}"
 
-                n_body_tensors = []
-                for label in features:
-                    n_body_tensor = sum(
-                        contract(
-                            einsum_str,
-                            *(adjacency_tensors[letter] for letter in permuted_label)
-                        ) for permuted_label in set(permutations(label))
-                    )
+                if not n_body_tensor.nnz:
+                    warnings.warn(f"feature {label} is identically 0")
 
-                    if not n_body_tensor.nnz:
-                        warnings.warn(f"feature {label} is identically 0")
-                    
-                    n_body_tensors.append(n_body_tensor)
-                
-                stacked_tensors = sparse.stack(n_body_tensors)
-                difference = symmetrize(stacked_tensors, axes=tuple(range(1, 1 + body_order))) - stacked_tensors
-                if difference.nnz and not np.allclose(difference.data, 0):
-                    raise ValueError(
-                        f"Topological tensors for body order {body_order} are not symmetric in indices 1..{body_order}"
-                    )
-                topological_tensors[body_order] = stacked_tensors
-            
-            topological_tensors[2] = sparse.COO(
-                coords=topological_tensors[2].coords,
-                data=topological_tensors[2].data.astype(np.int64),
-                shape=topological_tensors[2].shape
-            )
-            self.topological_tensors[topology_key] = topological_tensors
+                n_body_tensors.append(n_body_tensor)
+
+            stacked_tensors = sparse.stack(n_body_tensors)
+            difference = symmetrize(stacked_tensors, axes=tuple(range(1, 1 + body_order))) - stacked_tensors
+            if difference.nnz and not np.allclose(difference.data, 0):
+                raise ValueError(
+                    f"Topological tensors for body order {body_order} are not symmetric in indices 1..{body_order}"
+                )
+            topological_tensors[body_order] = stacked_tensors
+
+        topological_tensors[2] = sparse.COO(
+            coords=topological_tensors[2].coords,
+            data=topological_tensors[2].data.astype(np.int64),
+            shape=topological_tensors[2].shape
+        )
+        self.topological_tensors[topology_key] = topological_tensors
 
         return topological_tensors
 

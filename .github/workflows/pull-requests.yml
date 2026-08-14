@@ -31,6 +31,9 @@ jobs:
       - name: Lint with ruff
         run: >-
           ruff check tce/
+      - name: Complexity check with complexipy
+        run: >-
+          complexipy tce/ --failed --suggest-refactors
       - name: Type check with mypy
         run: >-
           mypy tce/

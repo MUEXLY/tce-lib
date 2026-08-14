@@ -46,6 +46,53 @@ class SurrogateModel:
         raise NotImplementedError
 
 
+def _transform_sklearn_pipeline(model: Model) -> SurrogateModel:
+
+    from_sklearn = model.__class__.__module__.startswith('sklearn')
+    if not from_sklearn:
+        raise ValueError("sklearn pipeline transformation is only valid for a model from sklearn")
+
+    from sklearn.pipeline import Pipeline
+
+    if not isinstance(model, Pipeline):
+        raise TypeError("model must be an instance of sklearn.pipeline.Pipeline")
+    def _infer_input_dim(pipeline: Pipeline):
+        # scan from the *front*
+        for _, step in pipeline.steps:
+            if hasattr(step, "n_features_in_"):
+                return step.n_features_in_
+
+        # fallback: try final estimator ONLY if nothing else exists
+        final = model.steps[-1][1]
+        if hasattr(final, "n_features_in_"):
+            return final.n_features_in_
+
+        raise ValueError("Could not infer input dimension.")
+
+    d = _infer_input_dim(model)
+
+    # find effective by plugging in basis vectors
+
+    def _eval_pipeline(pipeline: Pipeline, X: NDArray) -> float:
+        y = pipeline.predict(X)
+        return float(np.asarray(y).reshape(-1)[0])
+
+    x0 = np.zeros((1, d))
+    f0 = _eval_pipeline(model, x0)
+
+    beta = np.zeros(d)
+
+    # probe standard basis
+    for i in range(d):
+        xi = np.zeros((1, d))
+        xi[0, i] = 1.0
+
+        fi = _eval_pipeline(model, xi)
+        beta[i] = fi - f0
+
+    return SurrogateModel(beta)
+
+
 def transform_model(model: Model) -> Model:
 
     r"""
@@ -98,44 +145,7 @@ def transform_model(model: Model) -> Model:
 
     if isinstance(model, Pipeline):
 
-        # most complicated case, need to calculate an effective β
-
-        # find the final dimension d
-        def _infer_input_dim(pipeline):
-            # scan from the *front*
-            for _, step in pipeline.steps:
-                if hasattr(step, "n_features_in_"):
-                    return step.n_features_in_
-
-            # fallback: try final estimator ONLY if nothing else exists
-            final = pipeline.steps[-1][1]
-            if hasattr(final, "n_features_in_"):
-                return final.n_features_in_
-
-            raise ValueError("Could not infer input dimension.")
-
-        d = _infer_input_dim(model)
-
-        # find effective by plugging in basis vectors
-
-        def _eval_pipeline(pipeline, X):
-            y = pipeline.predict(X)
-            return float(np.asarray(y).reshape(-1)[0])
-
-        x0 = np.zeros((1, d))
-        f0 = _eval_pipeline(model, x0)
-
-        beta = np.zeros(d)
-
-        # probe standard basis
-        for i in range(d):
-            xi = np.zeros((1, d))
-            xi[0, i] = 1.0
-
-            fi = _eval_pipeline(model, xi)
-            beta[i] = fi - f0
-
-        return SurrogateModel(beta)
+        return _transform_sklearn_pipeline(model)
 
     raise NotImplementedError
 

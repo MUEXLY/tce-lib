@@ -49,6 +49,7 @@ dev = [
     "pytest-cov~=7.0.0",
     "ruff~=0.9.4",
     "mypy~=1.13.0",
+    "complexipy~=7.0.1",
     "pdoc~=15.0.1",
     "scipy-stubs~=1.15.3.0",
     "scikit-learn~=1.7.1",

@@ -150,6 +150,52 @@ def transform_model(model: Model) -> Model:
     raise NotImplementedError
 
 
+def _default_mc_callback(step_: int, num_steps_: int):
+    LOGGER.info(f"MC step {step_:.0f}/{num_steps_:.0f}")
+
+
+def _default_mc_step(generator: np.random.Generator) -> Callable[[Atoms], Atoms]:
+    def _step(atoms: Atoms) -> Atoms:
+        new_atoms = atoms.copy()
+        i, j = generator.integers(len(atoms), size=2)
+        new_atoms[i].symbol, new_atoms[j].symbol = new_atoms[j].symbol, new_atoms[i].symbol
+        return new_atoms
+    return _step
+
+
+def _resolve_beta_values(beta: float | Sequence[float] | NDArray[np.floating], num_steps: int):
+    if isinstance(beta, (Sequence, np.ndarray)):
+        assert len(beta) == num_steps, "if beta is a sequence, it must be the same length as num_steps"
+        return np.asarray(beta, dtype=float)
+    if isinstance(beta, (float, int, np.floating)):
+        return np.full(num_steps, float(beta))
+    raise TypeError("beta must be either a float or a sequence of floats")
+
+
+def _as_scalar(value):
+    if isinstance(value, np.ndarray):
+        return value.item()
+    return value
+
+
+def _prepare_energy_model(tce_calculator: TCECalculator, initial_configuration: Atoms):
+    zero_feature = np.zeros(tce_calculator.feature_vector_size).reshape(1, -1)
+    predicted = _as_scalar(tce_calculator.models["energy"].predict(zero_feature))
+
+    if predicted != 0.0:
+        warnings.warn(
+            "Input model has an intercept, which will mess with energy difference calculations. "
+            "The monte carlo run will automatically zero-out this intercept, transforming your model.",
+            UserWarning
+        )
+
+    transformed_model = transform_model(tce_calculator.models["energy"])
+    energy = _as_scalar(transformed_model.predict(
+        tce_calculator.get_feature_vector(initial_configuration).reshape(1, -1)
+    ))
+    return transformed_model, energy
+
+
 def monte_carlo(
     initial_configuration: Atoms,
     tce_calculator: TCECalculator,
@@ -213,52 +259,33 @@ def monte_carlo(
             Defaults to `False` for backwards compatibility.
     """
 
-    if not generator:
-        generator = np.random.default_rng(seed=0)
+    generator = np.random.default_rng(seed=0) if generator is None else generator
+    callback = callback or _default_mc_callback
+    mc_step = mc_step or _default_mc_step(generator)
+    energy_modifier = energy_modifier or (lambda initial, final: 0.0)
+    beta_values = _resolve_beta_values(beta, num_steps)
 
-    if not callback:
-        def callback(step_: int, num_steps_: int):
-            LOGGER.info(f"MC step {step_:.0f}/{num_steps_:.0f}")
+    transformed_model, energy = _prepare_energy_model(tce_calculator, initial_configuration)
 
-    if not mc_step:
-        def mc_step(atoms: Atoms) -> Atoms:
-            new_atoms = atoms.copy()
-            i, j = generator.integers(len(atoms), size=2)
-            new_atoms[i].symbol, new_atoms[j].symbol = new_atoms[j].symbol, new_atoms[i].symbol
-            return new_atoms
+    def _advance_mc_step(initial_configuration: Atoms, energy: float, step: int) -> tuple[Atoms, float]:
+        """Apply one Metropolis step and return the updated state."""
 
-    if not energy_modifier:
-        def energy_modifier(initial: Atoms, final: Atoms) -> float:
-            return 0.0
+        new_configuration = mc_step(initial_configuration)
+        feature_diff = tce_calculator.get_feature_vector_difference(
+            initial_configuration, new_configuration
+        ).reshape(1, -1)
+        energy_diff = transformed_model.predict(feature_diff)
+        energy_diff += energy_modifier(initial_configuration, new_configuration)
 
-    if isinstance(beta, (Sequence, np.ndarray)):
-        assert len(beta) == num_steps, "if beta is a sequence, it must be the same length as num_steps"
-        beta_values = np.array(beta)
-    elif isinstance(beta, float):
-        beta_values = np.full(num_steps, beta)
-    else:
-        raise TypeError("beta must be either a float or a sequence of floats")
+        if not isinstance(energy_diff, float):
+            energy_diff = energy_diff.item()
 
+        if np.exp(-beta_values[step] * energy_diff) > 1.0 - generator.random():
+            LOGGER.debug(f"move accepted with energy difference {energy_diff}")
+            initial_configuration = new_configuration
+            energy += energy_diff
 
-    # try to pass zeros into the model
-    zero_feature = np.zeros(tce_calculator.feature_vector_size).reshape(1, -1)
-    predicted = tce_calculator.models["energy"].predict(zero_feature)
-    if isinstance(predicted, np.ndarray):
-        predicted = predicted.item()
-    if predicted != 0.0:
-        warnings.warn(
-            "Input model has an intercept, which will mess with energy difference calculations. "
-            "The monte carlo run will automatically zero-out this intercept, transforming your model.",
-            UserWarning
-        )
-        
-    transformed_model = transform_model(tce_calculator.models["energy"])
-
-    energy = transformed_model.predict(
-        tce_calculator.get_feature_vector(initial_configuration).reshape(1, -1)
-    )
-    if isinstance(energy, np.ndarray):
-        energy = energy.item()
+        return initial_configuration, energy
 
     def _generating_fn(initial_configuration: Atoms, energy: float) -> Generator[Atoms, None, None]: 
         """Wrap the generator logic in a function so that we can return both output types."""
@@ -272,21 +299,7 @@ def monte_carlo(
                 yield to_save
                 LOGGER.info(f"saved configuration at step {step:.0f}/{num_steps:.0f}")
 
-            new_configuration = mc_step(initial_configuration)
-            feature_diff = tce_calculator.get_feature_vector_difference(
-                initial_configuration, new_configuration
-            ).reshape(1, -1)
-            energy_diff = transformed_model.predict(feature_diff)
-            energy_diff += energy_modifier(initial_configuration, new_configuration)
+            initial_configuration, energy = _advance_mc_step(initial_configuration, energy, step)
 
-            if not isinstance(energy_diff, float):
-                energy_diff = energy_diff.item()
-            if np.exp(-beta_values[step] * energy_diff) > 1.0 - generator.random():
-                LOGGER.debug(f"move accepted with energy difference {energy_diff}")
-                initial_configuration = new_configuration
-                energy += energy_diff
-
-    if return_generator: 
-        return _generating_fn(initial_configuration, energy)
-    
-    return list(_generating_fn(initial_configuration, energy))
+    frames = _generating_fn(initial_configuration, energy)
+    return frames if return_generator else list(frames)

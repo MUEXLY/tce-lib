@@ -216,6 +216,51 @@ class TCECalculator(Calculator):
     $m$ is the maximum body-order, and $\mathcal{A}$ denotes the set of elements included in the expansion.
     """
 
+    def _register_many_body_feature(
+        self,
+        feature: tuple[int, ...],
+        seen_features: set[tuple[int, ...]]
+    ) -> None:
+        """Validate a many-body feature and store it in the correct body-order bucket."""
+
+        discriminant = 1 + 8 * len(feature)
+        integer_sqrt = isqrt(discriminant)
+
+        if integer_sqrt * integer_sqrt != discriminant or (1 + integer_sqrt) % 2 != 0:
+            raise ValueError(
+                f"feature {feature} is invalid. Every feature label should have length (m choose 2) "
+                "where m is an integer"
+            )
+
+        canonical_feature = tuple(sorted(feature))
+        if canonical_feature in seen_features:
+            warnings.warn(f"feature {feature} is a duplicate feature by symmetry")
+
+        seen_features.add(canonical_feature)
+        self.feature_groups[(1 + integer_sqrt) // 2].append(feature)
+
+    def _build_einsum_str(self, body_order: int) -> str:
+        """Build the einsum contraction string for a given body order."""
+
+        latin_indices = LATIN_ALPHABET[:body_order]
+        greek_indices = GREEK_ALPHABET[:body_order]
+        mixed_indices = ','.join(
+            f'{latin}{greek}' for latin, greek in zip(latin_indices, greek_indices)
+        )
+        input_str = f"L{latin_indices},{mixed_indices}"
+        output_str = f"L{greek_indices}"
+        return f"{input_str}->{output_str}"
+
+    def _compute_feature_vector_size(self) -> int:
+        """Pre-compute the size of the flattened feature vector."""
+
+        num_species = len(self.species)
+        feature_vector_size = len(self.neighbor_cutoffs) * (num_species ** 2)
+        for body_order in self.feature_groups.keys():
+            if body_order >= 3:
+                feature_vector_size += len(self.feature_groups[body_order]) * (num_species ** body_order)
+        return feature_vector_size
+
     def __post_init__(self):
 
         Calculator.__init__(self)
@@ -232,52 +277,12 @@ class TCECalculator(Calculator):
         self.einsum_strs = {2: "Lij,iα,jβ->Lαβ"}
         seen_features: set[tuple[int, ...]] = set()
         for feature in self.many_body_features:
+            self._register_many_body_feature(feature, seen_features)
 
-            # each feature motif label is size (m choose 2)
-            # where m is the number of atoms in the motif
-            # we want to store m -> [list of features of size m]
-            # len(feature) here is the size of the label
-            # n = (m choose 2) implies that m^2 - m - 2n = 0
-            # so m = (1 + sqrt(1 + 8n)) / 2
-
-            discriminant = 1 + 8 * len(feature)
-            integer_sqrt = isqrt(discriminant)
-
-            if integer_sqrt * integer_sqrt != discriminant or (1 + integer_sqrt) % 2 != 0:
-                raise ValueError(
-                    f"feature {feature} is invalid. Every feature label should have length (m choose 2) "
-                    "where m is an integer"
-                )
-
-            if tuple(sorted(feature)) in seen_features:
-                warnings.warn(f"feature {feature} is a duplicate feature by symmetry")
-            
-            seen_features.add(tuple(sorted(feature)))
-            self.feature_groups[(1 + integer_sqrt) // 2].append(feature)
-
-        # Pre-compute einsum strings for each body order
         for body_order in self.feature_groups.keys():
-            latin_indices = LATIN_ALPHABET[:body_order]
-            greek_indices = GREEK_ALPHABET[:body_order]
+            self.einsum_strs[body_order] = self._build_einsum_str(body_order)
 
-            # build mixed indices i\alpha,j\beta,k\gamma,etc
-            mixed_indices = ','.join(
-                f'{latin}{greek}' for latin, greek in zip(latin_indices, greek_indices)
-            )
-            input_str = f"L{latin_indices},{mixed_indices}"
-            output_str = f"L{greek_indices}"
-            self.einsum_strs[body_order] = f"{input_str}->{output_str}"
-
-        # Pre-compute feature vector size
-        num_species = len(self.species)
-        self.feature_vector_size = len(self.neighbor_cutoffs) * (num_species ** 2)
-        
-        # For body_order >= 3, the number of features is len(feature_groups[body_order])
-        for body_order in self.feature_groups.keys():
-            if body_order >= 3:
-                num_features = len(self.feature_groups[body_order])
-                self.feature_vector_size += num_features * (num_species ** body_order)
-
+        self.feature_vector_size = self._compute_feature_vector_size()
         self.implemented_properties = list(self.models.keys())
     
 
@@ -354,34 +359,9 @@ class TCECalculator(Calculator):
         topological_tensors = {2: adjacency_tensors}
 
         for body_order, features in self.feature_groups.items():
-
-            final_result_str = LATIN_ALPHABET[:body_order]
-            input_str = ','.join(
-                f"{i1}{i2}" for i1, i2 in combinations(final_result_str, r=2)
+            topological_tensors[body_order] = self._compute_topological_tensors_for_body_order(
+                body_order, features, adjacency_tensors
             )
-            einsum_str = f"{input_str}->{final_result_str}"
-
-            n_body_tensors = []
-            for label in features:
-                n_body_tensor = sum(
-                    contract(
-                        einsum_str,
-                        *(adjacency_tensors[letter] for letter in permuted_label)
-                    ) for permuted_label in set(permutations(label))
-                )
-
-                if not n_body_tensor.nnz:
-                    warnings.warn(f"feature {label} is identically 0")
-
-                n_body_tensors.append(n_body_tensor)
-
-            stacked_tensors = sparse.stack(n_body_tensors)
-            difference = symmetrize(stacked_tensors, axes=tuple(range(1, 1 + body_order))) - stacked_tensors
-            if difference.nnz and not np.allclose(difference.data, 0):
-                raise ValueError(
-                    f"Topological tensors for body order {body_order} are not symmetric in indices 1..{body_order}"
-                )
-            topological_tensors[body_order] = stacked_tensors
 
         topological_tensors[2] = sparse.COO(
             coords=topological_tensors[2].coords,
@@ -755,6 +735,58 @@ class TCECalculator(Calculator):
         raise NotImplementedError
 
 
+    def _compute_topological_tensors_for_body_order(
+        self,
+        body_order: int,
+        features: list[tuple[int, ...]],
+        adjacency_tensors: dict[int, sparse.COO]
+    ) -> sparse.COO:
+        """Compute the symmetry-checked topological tensors for a single body order."""
+
+        final_result_str = LATIN_ALPHABET[:body_order]
+        input_str = ','.join(
+            f"{i1}{i2}" for i1, i2 in combinations(final_result_str, r=2)
+        )
+        einsum_str = f"{input_str}->{final_result_str}"
+
+        n_body_tensors = []
+        for label in features:
+            n_body_tensor = sum(
+                contract(
+                    einsum_str,
+                    *(adjacency_tensors[letter] for letter in permuted_label)
+                ) for permuted_label in set(permutations(label))
+            )
+
+            if not n_body_tensor.nnz:
+                warnings.warn(f"feature {label} is identically 0")
+
+            n_body_tensors.append(n_body_tensor)
+
+        stacked_tensors = sparse.stack(n_body_tensors)
+        difference = symmetrize(stacked_tensors, axes=tuple(range(1, 1 + body_order))) - stacked_tensors
+        if difference.nnz and not np.allclose(difference.data, 0):
+            raise ValueError(
+                f"Topological tensors for body order {body_order} are not symmetric in indices 1..{body_order}"
+            )
+        return stacked_tensors
+
+    def _calculate_property(self, atoms: Atoms, name: str) -> None:
+        """Compute and store one model property for a configuration."""
+
+        if name not in self.implemented_properties:
+            raise PropertyNotImplementedError(f"property {name} not included in models")
+
+        feature_vec = self.get_feature_vector(atoms)
+        if self.intensive[name]:
+            feature_vec /= len(atoms)
+
+        prop = self.models[name].predict(feature_vec.reshape(1, -1))
+        if isinstance(prop, np.ndarray):
+            prop = prop.squeeze()
+
+        self.results[name] = prop
+
     def calculate(
         self,
         atoms: Optional[Atoms] = None,
@@ -768,19 +800,7 @@ class TCECalculator(Calculator):
             raise ValueError
 
         for name in properties:
-
-            if name not in self.implemented_properties:
-                raise PropertyNotImplementedError(f"property {name} not included in models")
-
-            feature_vec = self.get_feature_vector(atoms)
-            if self.intensive[name]:
-                feature_vec /= len(atoms)
-
-            prop = self.models[name].predict(feature_vec.reshape(1, -1))
-            if isinstance(prop, np.ndarray):
-                prop = prop.squeeze()
-            
-            self.results[name] = prop
+            self._calculate_property(atoms, name)
 
 
     def train(self, configurations: list[Atoms]):

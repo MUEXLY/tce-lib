@@ -75,3 +75,8 @@ ignore_missing_imports = true
 
 [tool.coverage.run]
 source = ["tce"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    'ignore:Setting the shape on a NumPy array has been deprecated in NumPy 2.5.',
+]

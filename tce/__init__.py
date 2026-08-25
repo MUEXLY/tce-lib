@@ -463,7 +463,7 @@ where $\mathbf{I}$ is the identity matrix.
 
 """
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 __authors__ = ["Jacob Jeffries"]
 
 __url__ = "https://github.com/MUEXLY/tce-lib"

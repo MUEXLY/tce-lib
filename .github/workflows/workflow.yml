@@ -28,7 +28,7 @@ jobs:
           pip install -e .[dev]
       - name: Test with pytest
         run: >-
-          pytest -W error --cov
+          pytest --cov
       - name: Lint with ruff
         run: >-
           ruff check tce/

@@ -4,7 +4,7 @@ this module provides an `ase.calculator.Calculator` class that wraps `tce-lib`
 
 
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Optional, Union, Generator, Sequence # updated import order
 from itertools import permutations, combinations, repeat, product
 import logging
 from collections import defaultdict
@@ -19,18 +19,71 @@ from ase.data import atomic_numbers
 import numpy as np
 from numpy.typing import NDArray
 import sparse
+from scipy.spatial import KDTree
 from opt_einsum import contract
 from multiset import Multiset
 
 from .training import Model, LimitingRidge
 from .topology import hash_topology, symmetrize
 from .topology import get_adjacency_tensors
-from .citations import cite, ORIGINAL_PAPER, KMC_PAPER
 
 
 LOGGER = logging.getLogger(__name__)
 GREEK_ALPHABET = "αβγδεζηθικλμνξοπρστυφχψω"
 LATIN_ALPHABET = "ijklmnopqrstuvwxyz"
+
+#max_ent funct for optimized matrix sorting
+def _maximum_entropy_subset_up_to_size_k(
+    X: np.typing.NDArray, 
+    k: int,
+    epsilon: float = 1.0e-3
+) -> Generator[set[int], None, None]:
+    """
+    Compute maximum entropy subsets up to size k.
+    Expects input X of shape (n_samples, n_features).
+    @private
+    """
+
+    #standardizes the matrix's scale to be compared to original calculated matrix
+    X_proc = X.astype(np.float64, copy=True)
+    X_proc -= X_proc.mean(axis=0)
+    std = X_proc.std(axis=0)
+    std[std == 0.0] = 1.0  # Prevent division by zero for constant features
+    X_proc /= std
+
+    # Transpose so each column represents a sample vector w_y of dimension d
+    X_proc = X_proc.T
+    d, n = X_proc.shape
+
+    # initialize the subset with one sample, that sample being the one closest to the center
+    subset = [int(np.argmin(np.linalg.norm(X_proc, axis=0)))]
+
+    # initialize a mask that will make sure we only select new samples to add to the subset
+    mask = np.zeros(n, dtype=bool)
+    mask[subset[0]] = True
+
+    # compute the covariance matrix for the current subset
+    covariance = epsilon * np.eye(d)
+    covariance += X_proc[:, subset[0]:subset[0]+1] @ X_proc[:, subset[0]:subset[0]+1].T
+
+    while len(subset) <= k:
+        yield set(subset)
+
+        if len(subset) == k or len(subset) == n:
+            break
+
+        Y = np.linalg.solve(covariance, X_proc)   # shape: (d, n)
+        quad = np.sum(X_proc * Y, axis=0)          # shape: (n,)
+        quad[mask] = 0.0
+
+        gains = np.log1p(np.maximum(quad, 0.0))
+
+        j_new = int(np.argmax(gains))
+        subset.append(j_new)
+        mask[j_new] = True
+
+        x_new = X_proc[:, j_new:j_new+1]
+        covariance += x_new @ x_new.T
 
 
 @dataclass
@@ -391,7 +444,6 @@ class TCECalculator(Calculator):
         return topological_tensors
 
 
-    @cite(paper_link=ORIGINAL_PAPER)
     def get_feature_vector(
         self,
         atoms: Atoms
@@ -413,6 +465,7 @@ class TCECalculator(Calculator):
 
         topological_tensors = self.get_topological_tensors(atoms)
 
+        #symbols = np.array(atoms.get_chemical_symbols())
         indicator_tensor = atoms.numbers[:, None] == self.atomic_numbers[None, :]
         indicator_tensor = indicator_tensor.astype(float)
 
@@ -432,7 +485,6 @@ class TCECalculator(Calculator):
             pos += len(flattened)
 
         return feature_vec
-
 
     def get_normalizer(
         self,
@@ -455,97 +507,6 @@ class TCECalculator(Calculator):
             pos += num_features
 
         return normalizer
-
-
-    @cite(paper_link=ORIGINAL_PAPER)
-    def get_batched_feature_vectors(
-        self,
-        atoms_list: list[Atoms]
-    ) -> NDArray[np.floating]:
-
-        r"""
-        Compute batched feature vectors for many structures.
-
-        This function is quite similar to `TCECalculator.get_feature_vector`, but replaces the contractions:
-
-        $$ N_{\alpha_1\cdots\alpha_m}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{n=1}^m X_{i_n\alpha_n} $$
-
-        with a batched contraction instead:
-
-        $$ N_{S\alpha_1\cdots\alpha_m}^{[\ell]} = T_{i_1\cdots i_m}^{[\ell]}\prod_{n=1}^m X_{Si_n\alpha_n} $$
-
-        where $S$ indexes configurations, and the new indicator tensor $\mathbf{X}$ is:
-        
-        $$ X_{Si\alpha} = [\text{site $i$ in sample $S$ is occupied by type $\alpha$}] $$
-        
-        i.e., the function computes the cluster counts in a list of configurations, 
-        rather than for just one. Alternatively, the two calls are equivalent:
-
-        ```py
-        configurations: list[Atoms] = ...
-        calc: TCECalculator = ...
-
-        feature_matrix = np.array([
-            calc.get_feature_vector(atoms) for atoms in configurations
-        ])
-        feature_matrix = calc.get_batched_feature_vectors(configurations)
-        ```
-
-        Args:
-            atoms_list (list[Atoms]):
-                The list of configurations to compute feature vectors for. Every system must have the same geometry 
-                and topology.
-        """
-
-        topology_hashes = {hash_topology(atoms) for atoms in atoms_list}
-        if len(topology_hashes) != 1:
-            raise ValueError("For the batched calculation, every sample must have the same geometry and topology.")
-
-        num_sites = len(atoms_list[0])
-        topological_tensors = self.get_topological_tensors(atoms_list[0])
-
-        # first modify einsum string to have a sample index
-        # eg Lij,iα,jβ->Lαβ needs to become Lij,Siα,Sjβ->LSαβ, where S denotes a sample
-        batch_einsum_strs = {}
-        for body_order, einsum_str in self.einsum_strs.items():
-
-            input_indices, output_indices = einsum_str.split("->")
-            input_indices = input_indices.replace(",", ",S")
-            output_indices = output_indices.replace("L", "LS")
-
-            batch_einsum_strs[body_order] = f"{input_indices}->{output_indices}"
-
-        indicator_tensors = np.zeros(
-            (len(atoms_list), num_sites, len(self.species)),
-            dtype=float
-        )
-
-        for i, atoms in enumerate(atoms_list):
-            indicator_tensors[i, :, :] = (
-                atoms.numbers[:, None] == self.atomic_numbers[None, :]
-            ).astype(float)
-
-        feature_matrix = np.zeros((len(atoms_list), self.feature_vector_size), dtype=np.float64)
-        pos = 0
-
-        for body_order, t in topological_tensors.items():
-
-            einsum_str = batch_einsum_strs[body_order]
-            cluster_counts = contract(
-                einsum_str,
-                t,
-                *repeat(indicator_tensors, body_order)
-            )
-            cluster_counts = np.moveaxis(cluster_counts, 1, 0)
-
-            # Now flatten each sample the same way the single-structure version does
-            flattened = cluster_counts.reshape(len(atoms_list), -1)
-
-            feature_matrix[:, pos:pos + flattened.shape[1]] = flattened
-            pos += flattened.shape[1]
-
-        return feature_matrix
-
 
     def _get_feature_vector_difference_for_sites(
         self,
@@ -724,7 +685,6 @@ class TCECalculator(Calculator):
         return total_feature_diff
 
 
-    @cite(paper_link=ORIGINAL_PAPER)
     def get_feature_vector_difference(self, initial: Atoms, final: Atoms) -> NDArray[np.floating]:
 
         r"""
@@ -751,7 +711,6 @@ class TCECalculator(Calculator):
             return self.get_feature_vector_difference_transmutation(initial, final)
 
         raise NotImplementedError
-
 
     def calculate(
         self,
@@ -813,7 +772,6 @@ class TCECalculator(Calculator):
         return self
 
 
-    @cite(paper_link=KMC_PAPER)
     def difference_train(self, configuration_pairs: list[tuple[Atoms, Atoms]]):
 
         r"""
@@ -863,7 +821,6 @@ class TCECalculator(Calculator):
 
         return self
 
-
     def save(self, path: Union[Path, str]):
 
         r"""
@@ -910,3 +867,38 @@ class TCECalculator(Calculator):
         if not isinstance(obj, cls):
             raise ValueError(f"loaded object is not of type {cls.__name__}")
         return obj
+
+# err handling and center controlling
+    def get_batched_feature_vectors(
+        self,
+        atoms_list: Sequence[Atoms]
+    ) -> NDArray[np.floating]:
+        r"""
+        Compute feature vectors for a sequence of Atoms configurations 
+        and return them as a 2D matrix of shape (n_samples, n_features).
+        """
+        return np.array([self.get_feature_vector(atoms) for atoms in atoms_list])
+
+    def select_maximum_entropy_subsets(
+        self,
+        atoms_list: Sequence[Atoms],
+        k: int,
+        epsilon: float = 1.0e-3
+    ) -> Generator[list[Atoms], None, None]:
+
+        if not atoms_list:
+            raise ValueError("atoms_list cannot be empty")
+
+        feature_matrix = self.get_batched_feature_vectors(atoms_list)
+
+        normalizer = self.get_normalizer(atoms_list[0])
+        feature_matrix = feature_matrix / normalizer
+
+        for index_subset in maximum_entropy_subset_up_to_size_k(
+            X=feature_matrix,
+            k=k,
+            epsilon=epsilon
+        ):
+            # Sort indices to guarantee consistent ordering
+            alloy_indices = sorted(index_subset)
+            yield [atoms_list[i] for i in alloy_indices]

@@ -4,7 +4,7 @@ this module provides an `ase.calculator.Calculator` class that wraps `tce-lib`
 
 
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Optional, Union, Generator, Sequence # updated import order
 from itertools import permutations, combinations, repeat, product
 import logging
 from collections import defaultdict
@@ -23,9 +23,6 @@ from scipy.spatial import KDTree
 from opt_einsum import contract
 from multiset import Multiset
 
-# new import for optimized sorting:
-from typing import Generator, Sequence
-
 from .training import Model, LimitingRidge
 from .topology import hash_topology, symmetrize
 from .topology import get_adjacency_tensors
@@ -36,7 +33,7 @@ GREEK_ALPHABET = "αβγδεζηθικλμνξοπρστυφχψω"
 LATIN_ALPHABET = "ijklmnopqrstuvwxyz"
 
 #max_ent funct for optimized matrix sorting
-def maximum_entropy_subset_up_to_size_k(
+def _maximum_entropy_subset_up_to_size_k(
     X: np.typing.NDArray, 
     k: int,
     epsilon: float = 1.0e-3
@@ -44,6 +41,7 @@ def maximum_entropy_subset_up_to_size_k(
     """
     Compute maximum entropy subsets up to size k.
     Expects input X of shape (n_samples, n_features).
+    @private
     """
 
     #standardizes the matrix's scale to be compared to original calculated matrix
@@ -397,15 +395,10 @@ class TCECalculator(Calculator):
         topological_tensors = self.topological_tensors.get(topology_key)
 
         if topological_tensors is None:
-            
-            if not np.all(atoms.cell.angles() == 90):
-                raise ValueError("supercells must be orthogonal (for now)")
-
-            tree = KDTree(data=atoms.positions, boxsize=np.diag(atoms.cell))
 
             # these are boolean, so we can sum corresponding to logical or
             adjacency_tensors = get_adjacency_tensors(
-                tree=tree,
+                atoms=atoms,
                 cutoffs=self.neighbor_cutoffs,
                 tolerance=self.neighbor_tolerance
             )

@@ -467,6 +467,13 @@ class TCECalculator(Calculator):
 
         return topological_tensors
 
+
+    def encode(self, atoms: Atoms) -> np.typing.NDArray[np.floating]:
+
+        indicator_tensor = atoms.numbers[:, None] == self.atomic_numbers[None, :]
+        indicator_tensor = indicator_tensor.astype(float)
+        return indicator_tensor
+
     
     @cite(paper_link=ORIGINAL_PAPER)
     @cite(
@@ -496,10 +503,7 @@ class TCECalculator(Calculator):
         """
 
         topological_tensors = self.get_topological_tensors(atoms)
-
-        
-        indicator_tensor = atoms.numbers[:, None] == self.atomic_numbers[None, :]
-        indicator_tensor = indicator_tensor.astype(float)
+        indicator_tensor = self.encode(atoms)
 
         # Pre-allocate feature vector
         feature_vec = np.zeros(self.feature_vector_size, dtype=np.float64)
@@ -525,9 +529,6 @@ class TCECalculator(Calculator):
     ) -> NDArray[np.floating]:
 
         topological_tensors = self.get_topological_tensors(atoms)
-
-        indicator_tensor = atoms.numbers[:, None] == self.atomic_numbers[None, :]
-        indicator_tensor = indicator_tensor.astype(float)
 
         # Pre-allocate feature vector
         normalizer = np.zeros(self.feature_vector_size, dtype=np.float64)
@@ -611,11 +612,9 @@ class TCECalculator(Calculator):
             (len(atoms_list), num_sites, len(self.species)),
             dtype=float
         )
-
         for i, atoms in enumerate(atoms_list):
-            indicator_tensors[i, :, :] = (
-                atoms.numbers[:, None] == self.atomic_numbers[None, :]
-            ).astype(float)
+            indicator_tensors[i, :, :] = self.encode(atoms)
+        indicator_tensors = sparse.COO.from_numpy(indicator_tensors)
 
         feature_matrix = np.zeros((len(atoms_list), self.feature_vector_size), dtype=np.float64)
         pos = 0
@@ -627,7 +626,7 @@ class TCECalculator(Calculator):
                 einsum_str,
                 t,
                 *repeat(indicator_tensors, body_order)
-            )
+            ).todense()
             cluster_counts = np.moveaxis(cluster_counts, 1, 0)
 
             # Now flatten each sample the same way the single-structure version does
@@ -660,11 +659,8 @@ class TCECalculator(Calculator):
         if not np.all(np.isclose(initial.positions, final.positions)):
             raise ValueError("positions of the two configurations differ")
 
-        indicator_tensor = initial.numbers[:, None] == self.atomic_numbers[None, :]
-        X_init = indicator_tensor.astype(float)
-
-        indicator_tensor = final.numbers[:, None] == self.atomic_numbers[None, :]
-        X_final = indicator_tensor.astype(float)
+        X_init = self.encode(initial)
+        X_final = self.encode(final)
 
         sites = np.asarray(sites, dtype=np.int64)
         if len(sites) == 0:

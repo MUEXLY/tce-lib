@@ -12,6 +12,7 @@ from math import isqrt
 import warnings
 from pathlib import Path
 import pickle
+from string import Template
 
 from ase.calculators.calculator import Calculator, all_changes, PropertyNotImplementedError
 from ase import Atoms
@@ -25,7 +26,7 @@ from multiset import Multiset
 from .training import Model, LimitingRidge
 from .topology import hash_topology, symmetrize
 from .topology import get_adjacency_tensors
-from .citations import cite, ORIGINAL_PAPER, KMC_PAPER
+from .citations import cite, ORIGINAL_PAPER, KMC_PAPER, FOUR_BODY_PAPER
 
 
 LOGGER = logging.getLogger(__name__)
@@ -468,6 +469,13 @@ class TCECalculator(Calculator):
 
     
     @cite(paper_link=ORIGINAL_PAPER)
+    @cite(
+        paper_link=FOUR_BODY_PAPER, 
+        msg_template=Template(
+            "If you use 4-body or higher clusters with ${fn_name}, "
+            "please also cite ${url}"
+        )
+    )
     def get_feature_vector(
         self,
         atoms: Atoms
@@ -533,8 +541,15 @@ class TCECalculator(Calculator):
 
         return normalizer
 
-    
+
     @cite(paper_link=ORIGINAL_PAPER)
+    @cite(
+        paper_link=FOUR_BODY_PAPER, 
+        msg_template=Template(
+            "If you use 4-body or higher clusters with ${fn_name}, "
+            "please also cite ${url}"
+        )
+    )
     def get_batched_feature_vectors(
         self,
         atoms_list: list[Atoms]

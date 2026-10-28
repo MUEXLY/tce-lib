@@ -6,7 +6,8 @@ from string import Template
 
 LOGGER = logging.getLogger(__name__)
 ORIGINAL_PAPER: str = "https://doi.org/10.1016/j.commatsci.2025.114338"
-KMC_PAPER: str = "https://arxiv.org/abs/2605.23612"
+KMC_PAPER: str = "https://doi.org/10.1016/j.commatsci.2026.115142"
+FOUR_BODY_PAPER: str = "placeholder-url"
 
 
 def cite(
